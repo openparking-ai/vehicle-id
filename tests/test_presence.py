@@ -24,12 +24,16 @@ pytest.importorskip("cv2")
 
 from lanes import (  # noqa: E402
     CONTRASTS,
+    HEADLIGHT_LEVELS,
+    TEXTURES,
+    VEHICLE_SIZE,
     dead_sensor,
     flat,
     lane,
     matrix,
     rain,
     sensor_noise,
+    smooth_floor,
     vehicle,
 )
 from vehicle_id.presence import (  # noqa: E402
@@ -245,43 +249,123 @@ def test_light_scattered_change_is_not_a_vehicle(detector):
 
 
 @guarantee
-def test_heavy_weather_stops_the_gate_answering_rather_than_answering_wrongly(detector):
-    """MEASURED REGRESSION, recorded rather than hidden. Read this one.
+def test_weather_passes_through_a_TRUE_band_before_it_stops_answering(detector):
+    """MEASURED REGRESSION, and the shape of it is not what was published. Read this.
 
     Under the intensity measure this gate reported `False` for rain across 45%
     of the frame: scattered pixels were removed by a morphological open, the
-    lane still matched, and the verdict was "visible and empty".
+    lane still matched, and the verdict was "visible and empty". The structural
+    measure does not survive that, and the README and the contract said it
+    "stops answering above 5%" and "returns `null` above that".
 
-    The structural measure does not survive that. A window is 11px across and
-    rain streaks land everywhere, so almost every window decorrelates and the
-    fraction of the reference still recognisable falls under
-    `min_reference_match`. The gate stops answering.
+    **Both documents were wrong, and the repository's own evidence file said so.**
+    There is no `null` band above 5%. There is a `true` band: from 10% to 25%
+    streak coverage an EMPTY lane reads as occupied, at up to 0.99 confidence,
+    and only above that does the gate decline. `true` on an empty lane is a
+    ticket and an attendant for a car that is not there.
 
-    That is a real loss of capability and it is stated in the README and the
-    contract. What it is NOT is a wrong refusal: heavy weather resolves to
-    `None`, which puts the lane back to a ticket and a human. The measured
-    boundary is in `docs/measured/presence.json` under `rain`, and the
-    behaviour in between -- a spurious `True`, which costs a ticket nobody
-    needed -- is measured there too rather than left to be discovered.
-
-    The one thing that must hold at every coverage is that an empty lane in
-    weather never reads `False` while a vehicle in the same weather does not.
-    Both are asserted below.
+    Three bands, asserted here so the sentence cannot drift from the measurement
+    again -- and so can the property that actually matters, which is that none
+    of it produces the value that ends a transaction.
     """
-    heavy = detector.measure([rain(0.45)])
-    assert heavy.present is None, (
-        f"heavy rain read as {heavy.present}; the measured behaviour is None"
-    )
-    assert heavy.camera_health == REFERENCE_NOT_RECOGNISED
-
-    # The property that actually matters, across the whole sweep: weather may
-    # cost the gate its answer, but it may never produce the value that ends a
-    # transaction. `False` here would refuse a customer because it was raining.
-    for coverage in (0.10, 0.20, 0.30, 0.45):
+    #    coverage  the empty lane's verdict
+    bands = ((0.05, False), (0.10, True), (0.20, True), (0.25, True), (0.45, None))
+    for coverage, expected in bands:
         result = detector.measure([rain(coverage, seed=7)])
-        assert result.present is not False, (
-            f"rain at {coverage:.0%} coverage produced a refusal ({result.reason})"
+        assert result.present is expected, (
+            f"an empty lane in {coverage:.0%} streak coverage read {result.present}, "
+            f"not {expected} ({result.occupancy}); the published bands have moved"
         )
+
+    # The safety property, across the whole sweep and now with a vehicle in the
+    # frame. The previous version of this file asserted it over empty lanes
+    # only, and both documents then claimed it about frames containing a
+    # vehicle -- a claim about a scene the sweep never built.
+    for coverage in (0.05, 0.10, 0.20, 0.30, 0.45):
+        car = rain(coverage, seed=7, base=vehicle(*VEHICLE_SIZE, seed=7, contrast=1.0))
+        result = detector.measure([car])
+        assert result.present is not False, (
+            f"a VEHICLE in rain at {coverage:.0%} coverage produced a refusal "
+            f"({result.reason})"
+        )
+
+
+@guarantee
+def test_the_metal_plate_is_admitted_in_moderate_weather(detector):
+    """The operational consequence of the band above, on the scene the gate
+    exists for, asserted so it cannot quietly change.
+
+    A person holding something over the loop is refused on a dry lane -- that is
+    the whole point of this module. In the `true` band it is not: it transacts,
+    on the strength of the rain rather than the object. The gate does not merely
+    lose the ability to say `false` there; it issues the ticket for the exact
+    scene it was built to refuse.
+
+    This is asserted rather than merely documented because it is the thing a
+    garage operator is buying, and a regression back into silence about it
+    should turn the suite red. It applies to open-air entries; most garage
+    entries are covered, and how many are not is NOT MEASURED.
+    """
+    plate = vehicle(80, 40, seed=7, contrast=2.05)
+    dry = detector.measure([plate])
+    assert dry.present is False, "the metal plate is not refused even on a dry lane"
+
+    light = detector.measure([rain(0.05, seed=7, base=plate)])
+    assert light.present is False, "light rain already defeats the metal-plate case"
+
+    for coverage in (0.10, 0.20):
+        wet = detector.measure([rain(coverage, seed=7, base=plate)])
+        assert wet.present is True, (
+            f"the metal plate at {coverage:.0%} rain read {wet.present}, not True; "
+            "the measured band has moved and the documents say otherwise"
+        )
+
+
+@guarantee
+@pytest.mark.parametrize("pool", HEADLIGHT_LEVELS)
+def test_a_headlight_pool_never_refuses_the_car_that_cast_it(pool):
+    """M3's axis, and the safety property on it.
+
+    A covered entry is artificially lit and often dark, so an approaching car
+    throws its beams onto the floor BEFORE it is in frame: a large change in the
+    scene caused by a vehicle that is not yet the vehicle. Nothing had measured
+    what this gate makes of that.
+
+    What must hold at every pool is what must hold everywhere -- the car that is
+    actually there is never refused. What the pool DOES cost is asserted
+    separately below, because it is a real cost and not a footnote.
+    """
+    detector = PresenceDetector(reference=lane(90, seed=1))
+    result = detector.measure(
+        [vehicle(*VEHICLE_SIZE, seed=611, contrast=1.0, headlight=pool)]
+    )
+    assert result.present is not False, (
+        f"a vehicle under a beam pool of x{1 + pool:g} ambient was refused "
+        f"({result.reason})"
+    )
+
+
+@guarantee
+def test_a_bright_enough_beam_pool_opens_a_transaction_for_a_car_not_yet_there():
+    """The cost of the axis above, measured rather than left to be discovered.
+
+    An empty lane holds at `false` under a pool up to x3 the ambient light and
+    reads as OCCUPIED from x4 -- so a bright enough approach opens a transaction
+    for a car that has not arrived. Asserted from both sides: a test that only
+    checked the holding half would pass if the gate had stopped reacting to
+    light at all.
+    """
+    detector = PresenceDetector(reference=lane(90, seed=1))
+    holds = detector.measure([lane(90, seed=610, headlight=2.0)])
+    assert holds.present is False, (
+        f"an empty lane under a x3 pool read {holds.present}; the tolerated range "
+        "has moved"
+    )
+    trips = detector.measure([lane(90, seed=610, headlight=3.0)])
+    assert trips.present is True, (
+        f"an empty lane under a x4 pool read {trips.present}, not True; the "
+        "measured boundary has moved and the documents state the old one"
+    )
 
 
 @guarantee
@@ -423,25 +507,69 @@ def test_the_contrast_sweep_is_not_passing_because_everything_reads_present():
 
 
 @guarantee
-def test_no_cell_of_the_matrix_refuses_a_vehicle():
-    """The safety invariant, stated over the whole matrix rather than per case.
+def test_nothing_measured_anywhere_refuses_a_vehicle():
+    """The safety invariant, stated over EVERY scene that contains a vehicle.
 
     `false` is the only value that ends a transaction. Whatever else the gate
-    does across contrast, ground texture and body grain -- and it does not
-    separate everywhere, see the low-texture cells below -- it must never emit
-    that value for a frame with a vehicle in it.
+    does across contrast, ground texture, body grain, beam pools and weather --
+    and it does not separate everywhere, see the low-texture rows -- it must
+    never emit that value for a frame with a vehicle in it.
+
+    The previous version of this test covered the matrix alone, while both
+    published documents claimed the property "across 54 matrix cells AND the
+    weather sweep". No rain scene in the repository contained a vehicle: the
+    claim was made over a sweep that could not have tested it. The scenes now
+    exist and all three families are checked here, so the sentence and the test
+    cover the same ground.
     """
     refused = []
+
     for cell in matrix():
         detector = PresenceDetector(reference=lane(90, seed=1, texture=cell["texture"]))
         if detector.measure([cell["vehicle"]]).present is False:
-            refused.append(cell)
+            refused.append(
+                f"matrix contrast={cell['contrast']} texture={cell['texture']} "
+                f"surface={cell['surface']} headlight={cell['headlight']}"
+            )
+
+    detector = PresenceDetector(reference=lane(90, seed=1))
+    for coverage in (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.45):
+        car = rain(coverage, seed=7, base=vehicle(*VEHICLE_SIZE, seed=7, contrast=1.0))
+        if detector.measure([car]).present is False:
+            refused.append(f"a vehicle in {coverage:.0%} streak coverage")
+
+    for pool in HEADLIGHT_LEVELS:
+        car = vehicle(*VEHICLE_SIZE, seed=611, contrast=1.0, headlight=pool)
+        if detector.measure([car]).present is False:
+            refused.append(f"a vehicle under a beam pool of x{1 + pool:g} ambient")
+
     assert not refused, (
-        f"{len(refused)} matrix cells refused a vehicle: "
-        + ", ".join(
-            f"contrast={c['contrast']} texture={c['texture']} surface={c['surface']}"
-            for c in refused[:6]
-        )
+        f"{len(refused)} scenes containing a vehicle were REFUSED: "
+        + "; ".join(refused[:6])
+    )
+
+
+@guarantee
+def test_the_refusal_sweep_is_not_passing_because_nothing_is_measured():
+    """The control for the sweep above, and it is not optional.
+
+    "No scene produced `false`" is trivially satisfied by a gate that produces
+    `null` everywhere, and two of the three scene families in that test DO
+    return `null` at their extremes. So the sweep has to be shown to contain
+    real verdicts, and the same detector has to be shown still capable of
+    saying `false` at all -- otherwise the safety property is being proven by
+    the gate not working.
+    """
+    detector = PresenceDetector(reference=lane(90, seed=1))
+
+    seen = [detector.measure([cell["vehicle"]]).present for cell in matrix()]
+    assert sum(v is True for v in seen) > len(seen) // 2, (
+        f"only {sum(v is True for v in seen)} of {len(seen)} matrix vehicles were "
+        "SEEN; the refusal sweep is passing on null verdicts"
+    )
+    assert detector.measure([lane(90, seed=305)]).present is False, (
+        "the detector can no longer say `false` about anything; the refusal "
+        "sweep above proves nothing"
     )
 
 
@@ -453,11 +581,16 @@ def test_the_matrix_covers_both_sides_of_every_axis():
     above pass while measuring nothing. `OPENPARKING_SETTLED.md` section 6 says
     the fixture is part of the measurement; this applies that to coverage rather
     than to realism.
+
+    It went red when the headlight axis was added, which is the only evidence
+    that it works: an axis cannot be added to the fixture without somebody
+    deciding, here, that it is covered on both sides.
     """
     cells = matrix()
     contrasts = {c["contrast"] for c in cells}
     textures = {c["texture"] for c in cells}
     surfaces = {c["surface"] for c in cells}
+    headlights = {c["headlight"] for c in cells}
 
     assert any(c < 1.0 for c in contrasts), "no vehicle darker than the tarmac"
     assert any(c > 1.0 for c in contrasts), "no vehicle paler than the tarmac"
@@ -471,8 +604,66 @@ def test_the_matrix_covers_both_sides_of_every_axis():
     assert 0.0 in surfaces and any(s > 0 for s in surfaces), (
         "the object's own surface grain is not varied"
     )
-    assert len(cells) == len(contrasts) * len(textures) * len(surfaces), (
-        "the matrix is not the full product of its axes"
+    assert 0.0 in headlights and any(h > 0 for h in headlights), (
+        "the beams are never on; a covered entry is artificially lit and an "
+        "approaching car throws a pool into frame before it arrives"
+    )
+    assert len(cells) == (
+        len(contrasts) * len(textures) * len(surfaces) * len(headlights)
+    ), "the matrix is not the full product of its axes"
+
+
+@guarantee
+def test_the_fixture_axis_cannot_reach_the_texture_floor_and_a_real_floor_can():
+    """Q3a. An axis that could not reach the branch it existed to test.
+
+    `min_reference_texture` is 1.5 grey levels and the gate returns NOT MEASURED
+    below it. The `texture` axis was supposed to be what reached that -- and it
+    never did, in two rounds of review, because sensor grain was welded to the
+    scene at 3.5% of the light level, which is 3.15 grey levels at level 90 all
+    on its own. No value of `texture` could get under the floor, so the branch
+    was never once exercised by the matrix and nobody could tell.
+
+    Both halves are asserted, because only the pair says anything: the axis
+    still cannot reach it (so this is a real limit of the fixture and not a
+    story about one), and a scene with the grain wound down does reach it.
+    """
+    floor = PresenceDetector().min_reference_texture
+
+    # Half one: with grain welded on, the axis cannot reach the floor at ANY
+    # value -- not at the matrix's own textures, and not an order of magnitude
+    # below the smallest of them. That is the fact that hid the branch.
+    welded = {
+        texture: PresenceDetector(
+            reference=lane(90, seed=1, texture=texture)
+        )._reference_texture
+        for texture in (0.05, *TEXTURES)
+    }
+    assert all(v > floor for v in welded.values()), (
+        f"the texture axis reaches the {floor} floor with grain on: {welded}. "
+        "If that is deliberate, this test and the fixture's docstring both need "
+        "to change; if it is not, GRAIN has changed and the fixture's own limit "
+        "is no longer what it says."
+    )
+
+    # Half two: with grain wound to zero the axis spans the floor, so the branch
+    # is reachable. Only the pair says anything -- half one alone would pass on
+    # a fixture that could never express smooth ground at all, which is exactly
+    # the state this is here to end.
+    spans = {
+        texture: PresenceDetector(
+            reference=lane(90, seed=1, texture=texture, grain=0.0)
+        )._reference_texture
+        for texture in (0.15, 0.2)
+    }
+    assert spans[0.15] < floor < spans[0.2], (
+        f"with grain off the axis no longer spans the {floor} floor: {spans}; "
+        "the decoupling did not take"
+    )
+    below = PresenceDetector(reference=lane(90, seed=1, texture=0.15, grain=0.0))
+    result = below.measure([lane(90, seed=2, texture=0.15, grain=0.0)])
+    assert result.present is None and "texture" in result.reason, (
+        f"ground under the texture floor produced {result.present}, not NOT MEASURED"
     )
 
 
@@ -480,7 +671,7 @@ def test_the_matrix_covers_both_sides_of_every_axis():
 def test_ground_with_no_texture_is_not_measured_rather_than_guessed():
     """A real picture, in focus, of ground that carries nothing to recognise.
 
-    Smooth poured concrete under a clean sensor. The structural measure has
+    Sealed or painted concrete under a clean sensor. The structural measure has
     nothing to compare, and the contract's first rule applies: a value that was
     not measured is null. Never `false` -- a measure that cannot see the ground
     cannot report that the ground is empty.
@@ -488,17 +679,58 @@ def test_ground_with_no_texture_is_not_measured_rather_than_guessed():
     Note `camera_health` stays unset. Nothing is broken; this lane is simply not
     one this measure can serve, which is a different thing from a dead camera
     and must not page anybody.
+
+    The scene now lives in `lanes.py` rather than in this function, because the
+    evidence file has to measure the same picture the guarantee does. And it
+    matters more than it used to: most garage entries are covered, and a covered
+    entry is typically sealed or painted concrete rather than open asphalt.
+    Whether a real one carries enough texture is NOT MEASURED and is the
+    module's central open question.
     """
-    import cv2
-    import numpy as np
-
-    plain = np.full((360, 640), 120.0, np.float32)
-    plain += np.linspace(-6, 6, 360, dtype=np.float32)[:, None]
-    cv2.rectangle(plain, (0, 0), (640, 20), 100, -1)
-    plain += np.random.default_rng(3).normal(0, 0.6, (360, 640)).astype(np.float32)
-    smooth = cv2.merge([np.clip(plain, 0, 255).astype(np.uint8)] * 3)
-
-    result = PresenceDetector(reference=smooth).measure([smooth])
+    result = PresenceDetector(reference=smooth_floor()).measure([smooth_floor()])
     assert result.present is None
     assert result.camera_health is None, "a plain reference is not an equipment fault"
     assert "texture" in result.reason
+
+
+@guarantee
+def test_one_reason_covers_four_unrelated_conditions_and_the_documents_say_so():
+    """K3, disclosed rather than guessed at, and asserted so it cannot drift.
+
+    `reference_not_recognised` is documented as an equipment fault and published
+    under `camera_faults` in `GET /v1/health`. Heavy weather lands on it too,
+    and weather is not a fault -- a gate that pages a human about a working
+    camera every time it rains gets switched off, and then it protects nothing.
+
+    It is not fixed here, and the reason is worth stating: the branch is reached
+    by a moved camera, a rebuilt scene, a vehicle filling the frame and heavy
+    weather alike, and `presence.py` says so in as many words -- "All three are
+    indistinguishable from here." Relabelling the branch would trade a false
+    page for a MISSING one on the knocked camera the contract advertises, and
+    separating them needs a measurement this release does not make. So the
+    release DISCLOSES the conflation, and this test is what stops the disclosure
+    and the behaviour drifting apart.
+    """
+    from vehicle_id.plates.generator import PlateGenerator
+
+    detector = PresenceDetector(reference=lane(90, seed=1))
+    causes = {
+        "a vehicle close enough to fill the frame": vehicle(636, 356, seed=13),
+        "heavy weather": rain(0.45, seed=7),
+        "a capture that is not a view of this lane": PlateGenerator(seed=11)
+        .sample(degradation=0)
+        .image,
+    }
+    seen = {name: detector.measure([scene]).camera_health for name, scene in causes.items()}
+    assert set(seen.values()) == {REFERENCE_NOT_RECOGNISED}, (
+        f"the conditions no longer share one reason: {seen}. If they have been "
+        "separated, that is the fix and the documents must stop disclosing a "
+        "conflation that no longer exists."
+    )
+
+    # The control. A detector that reported this reason for EVERYTHING would
+    # make the assertion above pass while saying nothing about conflation.
+    assert detector.measure([flat(0)]).camera_health == NO_SIGNAL, (
+        "a dead camera reports the same reason as heavy weather; this test cannot "
+        "tell a conflation from a detector with one answer"
+    )

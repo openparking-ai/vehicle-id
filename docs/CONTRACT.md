@@ -99,13 +99,21 @@ transaction, so the engine says it only when it has the measurement to back it:
 the lane is visible, its ground is still recognisable as the ground the
 reference describes, and nothing is standing on it. Note the middle clause — it
 is what the measurement actually establishes, and it is weaker than "there is
-nothing there". A lane whose ground carries no texture to recognise, or whose
-view is broken up by heavy weather, cannot support that claim and returns `null`
-instead. A
-camera that failed, a view that no longer matches the reference, a vehicle close
-enough to fill the frame and a caller sending plate crops are all `null` — not
-because nothing is there, but because nobody can tell, and `null` is the value
-that means that.
+nothing there". A lane whose ground carries no texture to recognise cannot
+support that claim and returns `null` instead. A camera that failed, a view that
+no longer matches the reference, a vehicle close enough to fill the frame and a
+caller sending plate crops are all `null` — not because nothing is there, but
+because nobody can tell, and `null` is the value that means that.
+
+**`null` is not the only thing that happens when the gate loses the lane.** A
+scene disturbed enough — heavy weather in an open-air entry, a beam pool from a
+car that has not arrived — passes through a band where the gate reads an EMPTY
+lane as occupied and answers `true` before it gives up and answers `null`. That
+band is measured and published in the deployment section below, table by table,
+because `true` on an empty lane costs a ticket and an attendant. It is not a
+refusal — no scene measured has produced `false` for a frame with a vehicle in
+it — but it is not nothing either, and it is not something a reader should have
+to discover.
 
 Two invariants the record enforces, so you never have to check them:
 
@@ -313,27 +321,14 @@ Three things this release does NOT do, stated rather than left to be discovered:
   plate-sized object; hold an empty lane at `false` across
   <!--m:exposure.range-->light level 20 to 250 against a reference captured at 90<!--/m-->;
   and admit a lane with a vehicle in it at every vehicle/ground contrast tested,
-  including a vehicle at the ground's exact luminance.
+  including a vehicle at the ground's exact luminance. **What it is shown NOT to
+  do is measured too, and it is in its own section below** — including two bands
+  in which an empty lane reads as OCCUPIED. Read it before you switch this on.
 
-  What it is shown NOT to do, measured on the same matrix:
+  Real lanes, real cars, real weather: NOT MEASURED until the bench. The
+  occupancy floor, the ceiling, the structural threshold and the texture floor
+  are assumptions and are configurable for that reason.
 
-  * **Ground that carries no texture defeats it.** It separates vehicle from
-    empty at ground texture
-    <!--m:separation.textures_that_work-->1.0, 2.0<!--/m--> with a worst-case
-    occupancy margin of <!--m:separation.margin-->0.42<!--/m-->, and does not
-    separate at <!--m:separation.textures_that_fail-->0.25<!--/m-->, where an
-    empty lane reads as occupied. On smooth ground this gate gives you nothing.
-  * **Heavy weather stops it answering.** It answers `false` up to
-    <!--m:weather.answers_up_to-->5% of the frame in streaks<!--/m--> and returns
-    `null` above that.
-
-  What holds across everything measured: **no case produced `false` for a frame
-  with a vehicle in it** — <!--m:separation.refusals-->0<!--/m--> wrongful
-  refusals across <!--m:separation.cells-->54<!--/m--> matrix cells and the
-  weather sweep. Where it fails, it fails to `null`, which is a ticket and a
-  human. Real lanes, real cars, real weather: NOT MEASURED until the bench. The
-  occupancy floor, the ceiling and the structural threshold are assumptions and
-  are configurable for that reason.
 - **Presence needs a view of the LANE, not a crop of a plate.** A caller
   submitting tight plate crops has no empty-lane background in frame, so
   occupancy runs to the ceiling and presence is `null` — reads carry on exactly
@@ -349,6 +344,105 @@ Three things this release does NOT do, stated rather than left to be discovered:
   and whatever is in it is delivered. Anything that can write to it can put a
   record of its choosing in front of your consumer. Protect it as you would a
   credential.
+
+## What presence is measured to do, and what it is measured NOT to do
+
+Everything in this section is **generated** from `docs/measured/presence.json`
+by `scripts/eval_presence.py --update-docs`, and `tests/test_measured_docs.py`
+fails if a word of it drifts from the measurement.
+
+The sentences are generated and not merely the numbers, and that is not
+fastidiousness. The previous release stated a correct measured figure — the
+gate answers `false` up to 5% streak coverage — and, in the hand-written words
+beside it, "and returns `null` above that", which this same evidence file
+contradicted: there is a band in which an empty lane reads as OCCUPIED. A true
+number lent its credibility to a false sentence, in this document and in the
+README, and nothing could see it. So nothing hand-written describes measured
+behaviour here any more.
+
+<!--mb:presence.separation-->
+**The matrix, unedited.** 108 cells sweeping vehicle/ground contrast through the exactly-invisible case, ground texture, the vehicle's own surface grain, and a headlight pool on the floor. Each cell carries both scenes — the vehicle and the empty lane beside it — because a measure that answered one way for everything would pass a one-sided sweep perfectly.
+
+| configuration | cells | vehicle seen | vehicle refused | empty called empty | empty read occupied | margin | separates |
+|---|---|---|---|---|---|---|---|
+| ground texture 0.25, headlights off | 18 | 18 | 0 | 0 | 18 | 0.045 | **no** |
+| ground texture 0.25, headlight pool x3 | 18 | 16 | 0 | 4 | 14 | 0.247 | **no** |
+| ground texture 1, headlights off | 18 | 18 | 0 | 18 | 0 | 0.425 | yes |
+| ground texture 1, headlight pool x3 | 18 | 18 | 0 | 18 | 0 | 0.446 | yes |
+| ground texture 2, headlights off | 18 | 18 | 0 | 18 | 0 | 0.424 | yes |
+| ground texture 2, headlight pool x3 | 18 | 18 | 0 | 18 | 0 | 0.440 | yes |
+
+It separates vehicle from empty in 4 of 6 configurations, with a worst-case occupancy margin of 0.42.
+It does **not** separate in: ground texture 0.25, headlights off; ground texture 0.25, headlight pool x3. In those rows an empty lane reads as occupied, so the gate gives you nothing there — including no protection against the metal-plate case it exists for.
+<!--/mb-->
+
+<!--mb:presence.texture-->
+**Ground with no texture of its own is NOT MEASURED, never `false`.** The comparison asks whether a window still looks like the same piece of ground, so ground carrying nothing to recognise leaves it nothing to work with. Below 1.5 grey levels of typical local texture the gate declines to answer and says why.
+
+The matrix's own ground never gets near that floor — its texture axis bottoms out at 3.821 grey levels (texture 0.25 → 3.821, texture 1 → 9.194, texture 2 → 17.46), because the sensor's own grain is most of it. Sealed or painted concrete under a clean sensor is a different scene: it measures 0.67 grey levels and the gate returns `none`, with no camera fault raised — nothing is broken, this ground is simply not one this measure can serve.
+
+**This matters more than the number suggests.** Most garage entries are covered, and a covered entry is typically sealed or painted concrete rather than open asphalt — smoother, less grain, fewer markings. The failing case may well be the common one. **NOT MEASURED**: no real floor has been photographed, so how much texture a real covered entry carries is an open question, and the remedy if it carries too little is physical — paint markings, add a textured strip in view.
+<!--/mb-->
+
+<!--mb:presence.weather-->
+**Weather, measured on three scenes at every coverage** — an empty lane, a vehicle, and the metal plate the gate exists to refuse. The number beside each verdict is the measured occupancy.
+
+| streak coverage | empty lane | vehicle | metal plate |
+|---|---|---|---|
+| 5% | `false` 0.021 | `true` 0.519 | `false` 0.047 |
+| 10% | `true` 0.428 | `true` 0.666 | `true` 0.431 |
+| 15% | `true` 0.612 | `true` 0.724 | `true` 0.615 |
+| 20% | `true` 0.825 | `true` 0.878 | `true` 0.825 |
+| 25% | `true` 0.890 | `null` — | `true` 0.890 |
+| 30% | `null` — | `null` — | `null` — |
+| 35% | `null` — | `null` — | `null` — |
+| 45% | `null` — | `null` — | `null` — |
+
+**Three bands, not two.** `false` up to 5% of the frame in streaks; from 10% an **empty lane reads as OCCUPIED**, at up to 0.99 confidence; from 30% the gate declines to answer at all.
+
+The middle band is the one to read. `presence: true` with `outcome: "fallback"` tells a lane controller that a car is there and could not be identified, and this contract says refusing it is a bug in your integration — so in that band a conforming lane issues a ticket and raises an attendant for a car that is not there.
+
+**And the fraud is admitted with it.** The metal plate on the loop — the case this gate exists for — is correctly refused up to 5% coverage and then **transacts from 10%**, on the same streaks. In that band the gate does not merely lose the ability to say `false`; it issues the ticket for the exact scene it was built to refuse.
+
+This is a measured REGRESSION against the intensity measure that preceded it, which called heavy rain an empty lane correctly. It is recorded rather than argued away. **It applies to open-air entries.** Most garage entries are covered, and rain is not in a covered camera's view — how many are open is NOT MEASURED. Across the sweep, 0 of 8 vehicle scenes were refused.
+<!--/mb-->
+
+<!--mb:presence.headlight-->
+**Headlights on the floor.** A covered entry is artificially lit and often dark, so an approaching car throws its beams into frame before the car itself arrives — a large change in the scene caused by a vehicle that is not yet the vehicle. Measured with and without the car that cast the pool.
+
+| beam pool, peak x ambient | empty lane (car not yet in frame) | vehicle |
+|---|---|---|
+| x1 | `false` 0.001 | `true` 0.428 |
+| x1.5 | `false` 0.000 | `true` 0.442 |
+| x2 | `false` 0.000 | `true` 0.447 |
+| x3 | `false` 0.001 | `true` 0.453 |
+| x4 | `true` 0.205 | `true` 0.498 |
+| x5 | `true` 0.335 | `true` 0.540 |
+| x7 | `true` 0.477 | `true` 0.639 |
+| x9 | `true` 0.804 | `true` 0.667 |
+
+An empty lane holds at `false` up to a pool of x3 ambient and reads as OCCUPIED from x4 — the beams of a car that has not arrived open a transaction for it.
+
+0 of 8 vehicle scenes were refused. **The model is a limitation of these numbers**: multiplicative pool on a matte floor; no specular glare, no beam cut-off. A gloss or wet floor at night is a specular scene and this is a matte one. **NOT MEASURED** on any real entry.
+<!--/mb-->
+
+<!--mb:presence.safety-->
+**The one thing that holds everywhere measured.** 0 wrongful refusals in 124 scenes containing a vehicle: 108 matrix cells, 8 weather coverages and 8 headlight pools, each measured with a vehicle in the frame. `false` is the only value that ends a transaction, and no scene measured produced it for a frame with a vehicle in it. Where this gate fails it fails to `null` — a ticket and a human.
+
+Every one of those scenes is a drawn rectangle on a drawn lane. The claim is that the measure holds across everything that has been put through it, not that everything has been put through it.
+<!--/mb-->
+
+<!--mb:presence.conflation-->
+**One reason covers several unrelated conditions, and this release cannot tell them apart.** `reference_not_recognised` is reported for all of the following:
+
+- a capture that is not a view of this lane
+- a vehicle close enough to fill the frame
+- heavy weather
+
+It is published under `camera_faults` in `GET /v1/health`, and for a moved camera that is right. For heavy weather it is not: nothing is broken. **Do not read this reason as a confirmed equipment fault** — read it as "the capture no longer matches the reference, for one of several reasons this build cannot separate". Separating them needs a measurement this release does not make, and inventing one would be guessing; naming the conflation is the honest thing available now.
+<!--/mb-->
+
+---
 
 ## Local only
 

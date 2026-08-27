@@ -23,7 +23,12 @@ from pathlib import Path
 from .contract import Capture
 from .engine import PlateEngine, UnmeasuredWeights
 from .plates.recognizer import DEFAULT_WEIGHTS
-from .presence import DEFAULT_MIN_OCCUPANCY, PresenceDetector
+from .presence import (
+    DEFAULT_MIN_OCCUPANCY,
+    KNOWN_LIMITS,
+    UNVALIDATED,
+    PresenceDetector,
+)
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
@@ -113,13 +118,14 @@ def _presence(args):
     # the README say the same thing, and neither is read by the person typing
     # the flag at 6am. Presence is off by default precisely so that turning it
     # on is a decision, and a decision nobody was told about is not one.
-    print(
-        "presence gate ON, and UNVALIDATED: it has never been measured against a "
-        "real vehicle, only against synthetic scenes. It gives nothing on "
-        "untextured ground and stops answering in heavy weather. See the "
-        "presence section of README.md.",
-        file=sys.stderr,
-    )
+    #
+    # The text is `presence.UNVALIDATED` and `presence.KNOWN_LIMITS` rather than
+    # a sentence written here, so that this seam and the health endpoint cannot
+    # end up disclosing different things.
+    print(f"presence gate ON. {UNVALIDATED}", file=sys.stderr)
+    for limit in KNOWN_LIMITS:
+        print(f"  - {limit}", file=sys.stderr)
+    print("  See the presence section of README.md for the measured tables.", file=sys.stderr)
     return PresenceDetector(reference=reference, min_occupancy=args.min_occupancy)
 
 

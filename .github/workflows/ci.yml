@@ -138,10 +138,26 @@ jobs:
           fi
           echo "refused, as required"
 
-      - name: Every published figure is still the measured one
+      - name: Every published figure AND SENTENCE is still the measured one
         # The documentation fail-control. `eval_presence.py` re-measures what the
         # gate does and the check compares it with what README.md and
         # docs/CONTRACT.md say. A figure edited by hand turns this red.
+        #
+        # It now covers the SENTENCES too, and that is not a refinement. The
+        # previous release stated a correct measured figure -- "`false` up to 5%
+        # streak coverage" -- and, in the hand-written words beside it, "and
+        # stops answering above that", which the same evidence file contradicted:
+        # there is a `true` band from 10% to 25% in which an empty lane reads as
+        # occupied. A true number lent its credibility to a false sentence in
+        # both published documents and nothing here could see it. Sections
+        # describing measured behaviour are generated as `<!--mb:-->` blocks now,
+        # and this compares them the same way it compares the numbers.
+        #
+        # It also checks the evidence file's own booleans: every one published as
+        # `true` must name a control, and every control must actually be false.
+        # `never_refuses_in_weather` was `all(x is not False or True ...)` for two
+        # rounds -- true for every input in the universe -- and it was the
+        # module's load-bearing safety property.
         #
         # NOTE what this deliberately does NOT do: re-measure the noise rates.
         # It used to, and it was wrong. Those rates describe a RECOGNISER, this

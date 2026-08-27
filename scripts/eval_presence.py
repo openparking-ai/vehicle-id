@@ -15,6 +15,14 @@ command cannot drift from the measurement without the command saying so --
 
 The noise rates need real weights. The gate's own geometry -- the exposure range,
 the confidence transition -- needs none, and is measured whatever is installed.
+
+**Every boolean this file publishes carries a CONTROL**, in the `controls`
+block: the input that makes it false, measured in the same run. A boolean nobody
+has ever seen go red is not evidence, and this file shipped one -- the weather
+safety flag was `all(x is not False or True ...)`, which is `True` for every
+input that exists. It was the load-bearing safety property of the module. See
+`controls()` below, and `tests/test_measured_docs.py` for the check that every
+boolean has one and that every control is actually false.
 """
 
 from __future__ import annotations
@@ -31,34 +39,67 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-from measured_figures import DOCUMENTS, figures, rewrite  # noqa: E402
+from measured_figures import BLOCKS, DOCUMENTS, blocks, figures, rewrite  # noqa: E402
 
 # The same scenes the tests use, imported rather than re-typed, so a published
 # number and the test guarding it cannot describe different pictures.
-from lanes import CONTRASTS, lane, matrix, rain, vehicle  # noqa: E402
+from lanes import (  # noqa: E402
+    CONTRASTS,
+    HEADLIGHT_LEVELS,
+    TEXTURES,
+    VEHICLE_SIZE,
+    lane,
+    matrix,
+    rain,
+    smooth_floor,
+    vehicle,
+)
 from vehicle_id.presence import PresenceDetector  # noqa: E402
 
 EVIDENCE = Path("docs/measured/presence.json")
 
-def exposure_range(detector, seed_base: int = 400) -> dict:
+#: The coverages the weather sweep samples, and the beam pools the headlight
+#: sweep samples. Named here because the control runs have to sweep the same
+#: points as the real run, or the control is measuring something else.
+RAIN_COVERAGES = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.45)
+
+#: The object the metal-plate case is made of: roughly plate-sized against a
+#: lane-filling camera, about 1% of the frame. The scene the gate exists for.
+PLATE_SIZE = (80, 40)
+
+
+def _verdict(result) -> dict:
+    return {
+        "present": result.present,
+        "occupancy": round(result.occupancy, 4) if result.occupancy is not None else None,
+        "confidence": round(result.confidence, 4) if result.confidence is not None else None,
+        "camera_health": result.camera_health,
+    }
+
+
+def exposure_range(detector, seed_base: int = 400, levels=range(20, 251, 5)) -> dict:
     """The span of exposures over which an EMPTY lane still reads `false`.
 
     B1b's acceptance. The reference is captured at one light level; the question
     is how far the light may move before the gate stops being able to say the
     lane is empty. Differencing raw intensity, the answer was 30 grey levels --
     beyond that an empty lane read as a vehicle filling 82% of the frame.
+
+    `levels` is a parameter so that the control run can sweep a range this is
+    NOT expected to survive. See `controls()`.
     """
+    levels = list(levels)
     holds = []
-    for index, level in enumerate(range(20, 251, 5)):
+    for index, level in enumerate(levels):
         result = detector.measure([lane(level, seed=seed_base + index)])
         if result.present is False:
             holds.append(level)
     return {
         "reference_level": 90,
-        "lowest_level_still_false": min(holds),
-        "highest_level_still_false": max(holds),
-        "levels_tested": list(range(20, 251, 5)),
-        "all_false_across_range": len(holds) == len(range(20, 251, 5)),
+        "lowest_level_still_false": min(holds) if holds else None,
+        "highest_level_still_false": max(holds) if holds else None,
+        "levels_tested": levels,
+        "all_false_across_range": len(holds) == len(levels),
     }
 
 
@@ -94,28 +135,44 @@ def confidence_transition(detector) -> dict:
     }
 
 
-def separation(seed_base: int = 5000) -> dict:
+def _row_label(texture: float, headlight: float) -> str:
+    lit = "headlights off" if headlight == 0 else f"headlight pool x{1 + headlight:g}"
+    return f"ground texture {texture:g}, {lit}"
+
+
+def separation(**detector_kwargs) -> dict:
     """The G2 matrix: does the measure separate vehicle from empty, and by how much.
 
-    Reported per ground texture, because that is the axis it turns on. Within
-    each texture the whole contrast sweep is collapsed into the WORST case --
-    the smallest vehicle occupancy and the largest empty-lane occupancy seen
-    across every contrast and surface. A mean would hide the one cell that
-    fails, which is the only cell worth publishing.
+    Reported per (ground texture, headlight) configuration, because those are the
+    axes it turns on. Within each row the whole contrast and surface sweep is
+    collapsed into the WORST case -- the smallest vehicle occupancy and the
+    largest empty-lane occupancy seen across every cell in the row. A mean would
+    hide the one cell that fails, which is the only cell worth publishing.
+
+    Headlights are a row rather than a column deliberately. The empty scene of a
+    lit row is a lane with a beam pool on it and NO car in frame -- the second
+    before a car arrives -- and a gate that calls that occupied transacts for a
+    vehicle that is not there yet. Folding it in with the unlit rows would let
+    one hide inside the other.
 
     `margin` is the gap between them in occupancy terms. It is positive when
     every vehicle in that row outranks every empty lane in it, and the decision
     floor sits inside the gap.
+
+    `detector_kwargs` exists for the control run, which deliberately breaks the
+    detector so that `separates` can be seen to go false.
     """
     rows = {}
     for cell in matrix():
-        texture = cell["texture"]
-        detector = PresenceDetector(reference=lane(90, seed=1, texture=texture))
+        reference = lane(90, seed=1, texture=cell["texture"])
+        detector = PresenceDetector(reference=reference, **detector_kwargs)
         v = detector.measure([cell["vehicle"]])
         e = detector.measure([cell["empty"]])
         row = rows.setdefault(
-            str(texture),
+            _row_label(cell["texture"], cell["headlight"]),
             {
+                "texture": cell["texture"],
+                "headlight": cell["headlight"],
                 "cells": 0,
                 "vehicle_seen": 0,
                 "vehicle_refused": 0,
@@ -153,29 +210,157 @@ def separation(seed_base: int = 5000) -> dict:
     return rows
 
 
-def weather(detector) -> dict:
-    """Where scattered weather stops the gate answering, and what it does before.
+def weather(detector, coverages=RAIN_COVERAGES) -> dict:
+    """What weather does to each of the three scenes that matter.
 
     Published because the structural measure LOST capability here relative to
     the intensity measure it replaced, and a regression that is only in a commit
     message is not recorded. An 11px window catches a rain streak almost
     anywhere, so scatter decorrelates the frame rather than being opened away.
+
+    THREE scenes at every coverage, not one. The previous version measured the
+    empty lane alone and the documents then claimed "no wrongful refusal across
+    the weather sweep" -- a claim about frames containing a vehicle, made over a
+    sweep in which no frame contained one. The vehicle case is now measured, and
+    so is the metal plate, because the plate is what the gate exists for and
+    "the fraud is admitted in moderate rain" is the operational consequence a
+    garage has to be told about.
     """
-    out = []
-    for coverage in (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.45):
-        result = detector.measure([rain(coverage, seed=7)])
-        out.append(
+    sweep = []
+    for coverage in coverages:
+        empty = detector.measure([rain(coverage, seed=7)])
+        car = detector.measure(
+            [rain(coverage, seed=7, base=vehicle(*VEHICLE_SIZE, seed=7, contrast=1.0))]
+        )
+        plate = detector.measure(
+            [rain(coverage, seed=7, base=vehicle(*PLATE_SIZE, seed=7, contrast=2.05))]
+        )
+        sweep.append(
             {
                 "coverage": coverage,
-                "present": result.present,
-                "occupancy": round(result.occupancy, 4) if result.occupancy is not None else None,
+                "empty_lane": _verdict(empty),
+                "vehicle": _verdict(car),
+                "metal_plate": _verdict(plate),
             }
         )
-    empty_false = [r["coverage"] for r in out if r["present"] is False]
+
+    answered_false = [r["coverage"] for r in sweep if r["empty_lane"]["present"] is False]
+    read_occupied = [r["coverage"] for r in sweep if r["empty_lane"]["present"] is True]
+    declined = [r["coverage"] for r in sweep if r["empty_lane"]["present"] is None]
+    admitted = [r["coverage"] for r in sweep if r["metal_plate"]["present"] is True]
+    refusals = sum(1 for r in sweep if r["vehicle"]["present"] is False)
     return {
-        "sweep": out,
-        "highest_coverage_still_answered_false": max(empty_false) if empty_false else None,
-        "never_refuses_in_weather": all(r["present"] is not False or True for r in out),
+        "sweep": sweep,
+        "highest_coverage_still_answered_false": max(answered_false) if answered_false else None,
+        "coverages_reading_occupied_with_an_empty_lane": read_occupied,
+        "lowest_coverage_reading_occupied": min(read_occupied) if read_occupied else None,
+        "lowest_coverage_declining_to_answer": min(declined) if declined else None,
+        "metal_plate_admitted_from": min(admitted) if admitted else None,
+        "vehicle_cells": len(sweep),
+        "vehicle_refusals": refusals,
+        # FIXED. This was `all(r["present"] is not False or True for r in out)`,
+        # which is True for every input in the universe, and it was the module's
+        # load-bearing safety property. It now reads the vehicle scenes -- which
+        # did not exist when it was written -- and `controls()` shows it false.
+        "never_refuses_in_weather": refusals == 0 and len(sweep) > 0,
+    }
+
+
+def headlights(detector, amounts=HEADLIGHT_LEVELS) -> dict:
+    """A beam pool on the floor, with and without the car that cast it.
+
+    M3's axis. A covered entry is artificially lit and often dark, and an
+    approaching car throws its beams into frame BEFORE the car does. That is a
+    large change in the scene caused by a vehicle that is not yet the vehicle,
+    and nothing had measured what this gate makes of it.
+
+    The empty-lane row is the interesting one: it is the second before a car
+    arrives, and a `true` there is a transaction opened for a vehicle that has
+    not got there. The vehicle row is the ordinary night arrival.
+    """
+    sweep = []
+    for amount in amounts:
+        empty = detector.measure([lane(90, seed=610, headlight=amount)])
+        car = detector.measure(
+            [vehicle(*VEHICLE_SIZE, seed=611, contrast=1.0, headlight=amount)]
+        )
+        sweep.append({"pool": amount, "empty_lane": _verdict(empty), "vehicle": _verdict(car)})
+
+    held = [r["pool"] for r in sweep if r["empty_lane"]["present"] is False]
+    tripped = [r["pool"] for r in sweep if r["empty_lane"]["present"] is True]
+    refusals = sum(1 for r in sweep if r["vehicle"]["present"] is False)
+    return {
+        "sweep": sweep,
+        "model": "multiplicative pool on a matte floor; no specular glare, no beam cut-off",
+        "highest_pool_still_empty": max(held) if held else None,
+        "lowest_pool_reading_occupied": min(tripped) if tripped else None,
+        "vehicle_cells": len(sweep),
+        "vehicle_refusals": refusals,
+        "never_refuses_under_headlights": refusals == 0 and len(sweep) > 0,
+    }
+
+
+def texture_floor(scenes=None) -> dict:
+    """Q3a: the branch that says "this ground carries nothing to recognise".
+
+    It was never once reached. `min_reference_texture` is 1.5 grey levels, and
+    the fixture's sensor grain alone is 3.15 at level 90 -- so no value of the
+    `texture` axis could get under the floor, and an axis existed that could not
+    reach the code path it was there to test. Grain is now its own axis and
+    `smooth_floor()` is a real picture, in focus, of ground with nothing on it.
+
+    Both halves are published: the reference texture the matrix's own ground
+    measures (all comfortably above the floor, which is the fact that hid this),
+    and the smooth floor that reaches it.
+    """
+    axis = {}
+    for texture in TEXTURES:
+        detector = PresenceDetector(reference=lane(90, seed=1, texture=texture))
+        axis[f"texture {texture:g}"] = round(detector._reference_texture, 3)
+
+    detector = PresenceDetector(reference=smooth_floor())
+    measured = detector.measure([smooth_floor()])
+    return {
+        "min_reference_texture": detector.min_reference_texture,
+        "matrix_ground_reference_texture": axis,
+        "matrix_axis_can_reach_the_floor": any(
+            v < detector.min_reference_texture for v in axis.values()
+        ),
+        "smooth_floor_reference_texture": round(detector._reference_texture, 3),
+        "smooth_floor": _verdict(measured),
+        "reached": measured.present is None and "texture" in measured.reason,
+    }
+
+
+def conflated_reasons(detector) -> dict:
+    """K3/Q1: what `reference_not_recognised` actually means, measured.
+
+    The label is documented as an equipment fault -- "something wrong with the
+    camera or the reference" -- and the service publishes it under
+    `camera_faults`. Heavy weather lands on it too, and weather is not a fault.
+
+    The fix needs a discriminator this release does not have: the branch is
+    reached by a moved camera, a rebuilt scene, a vehicle filling the frame and
+    heavy weather alike, and `presence.py` says so in as many words -- "All
+    three are indistinguishable from here." Relabelling the branch would trade a
+    false page for a MISSING one, on the knocked camera the contract advertises.
+    So the release DISCLOSES the conflation instead of guessing, and this
+    measures the disclosure so the document cannot drift from it.
+    """
+    from vehicle_id.plates.generator import PlateGenerator
+
+    causes = {
+        "a vehicle close enough to fill the frame": vehicle(636, 356, seed=13),
+        "heavy weather": rain(0.45, seed=7),
+        "a capture that is not a view of this lane": PlateGenerator(seed=11)
+        .sample(degradation=0)
+        .image,
+    }
+    seen = {name: detector.measure([scene]).camera_health for name, scene in causes.items()}
+    return {
+        "causes": seen,
+        "all_report_the_same_reason": len(set(seen.values())) == 1,
+        "reason_reported": sorted(set(v for v in seen.values() if v)),
     }
 
 
@@ -227,6 +412,111 @@ def noise_rates(weights: Path, reads: int, seeds: int) -> dict | None:
     return out
 
 
+# --- the controls --------------------------------------------------------
+#
+# K5b. The fail-control rule, applied to an evidence file rather than to a test.
+# It exists because this file published `never_refuses_in_weather: true` from an
+# expression that could not evaluate to anything else, and that boolean was the
+# module's load-bearing safety property. A flag nobody has ever seen go red is
+# not evidence of anything, and neither is one that CANNOT.
+#
+# Every boolean the evidence file publishes appears here with the input that
+# makes it false, MEASURED in the same run rather than argued. Two of them come
+# free -- the low-texture rows really do fail to separate, and the matrix's own
+# ground really cannot reach the texture floor -- and a control that occurs in
+# the published data is worth more than a planted one. The rest are planted.
+#
+# `tests/test_measured_docs.py` fails if a published boolean has no control, or
+# if any control is not false.
+
+
+def controls(detector) -> dict:
+    """The input that makes each published boolean false, measured."""
+    out = {}
+
+    # Break the light, not the gate: sweep exposures the fit cannot reconcile
+    # with a reference captured at 90. A gain under 0.2 is not this lane.
+    out["exposure.all_false_across_range"] = {
+        "how": "the same sweep extended to light levels 1-11, which the "
+               "illumination fit cannot reconcile with a reference captured at 90",
+        "value": exposure_range(detector, seed_base=900, levels=range(1, 12, 2))[
+            "all_false_across_range"
+        ],
+    }
+
+    # A detector that cannot see a change at all. Nothing registers as changed,
+    # so no vehicle is seen and no row can separate.
+    broken = separation(min_structural_change=0.999)
+    out["separation.separates"] = {
+        "how": "the same matrix with min_structural_change at 0.999, so no window "
+               "can register as changed",
+        "value": any(row["separates"] for row in broken.values()),
+        "also_occurs_unplanted": "the ground texture 0.25 rows separate=false in the "
+                                 "published run; a real failure beats a planted one",
+    }
+
+    # A floor so high that a vehicle occupying 43% of the frame is called an
+    # empty lane. That is the wrongful refusal the flag exists to detect, and it
+    # controls both the summary flag AND the raw verdicts it summarises: under
+    # this detector a vehicle in rain reads `false`, in the same table, so the
+    # published "the vehicle scenes never read false" is a statement the run can
+    # be seen to contradict when it is untrue.
+    refusing = PresenceDetector(reference=lane(90, seed=1), min_occupancy=0.85)
+    broken_weather = weather(refusing)
+    broken_headlight = headlights(refusing)
+    how_refusing = (
+        "the same sweep with min_occupancy at 0.85, so a vehicle reads as an empty lane"
+    )
+    out["weather.never_refuses_in_weather"] = {
+        "how": how_refusing,
+        "value": broken_weather["never_refuses_in_weather"],
+    }
+    out["headlight.never_refuses_under_headlights"] = {
+        "how": how_refusing,
+        "value": broken_headlight["never_refuses_under_headlights"],
+    }
+    # The raw verdicts underneath those flags. A verdict published only ever as
+    # `true` is a claim like any other, and this is the input that makes it
+    # `false` -- recorded as the verdict itself, measured, not as a promise.
+    out["weather.present"] = {
+        "how": how_refusing + "; the verdict for the vehicle scene at the lowest coverage",
+        "value": broken_weather["sweep"][0]["vehicle"]["present"],
+    }
+    out["headlight.present"] = {
+        "how": how_refusing + "; the verdict for the vehicle scene at the lowest pool",
+        "value": broken_headlight["sweep"][0]["vehicle"]["present"],
+    }
+
+    # Conditions that do NOT share a reason, so the flag saying three of them do
+    # can be seen to go false. A dead feed and a knocked view are named
+    # differently, and that is the distinction the conflation flag is about.
+    from lanes import flat as _flat_scene
+
+    distinct = {
+        "a dead camera": detector.measure([_flat_scene(0)]).camera_health,
+        "a capture that is not a view of this lane": detector.measure(
+            [vehicle(636, 356, seed=13)]
+        ).camera_health,
+    }
+    out["conflated_reasons.all_report_the_same_reason"] = {
+        "how": "a dead camera beside a frame-filling object; these are named "
+               "differently, so the flag can be seen to distinguish them",
+        "value": len(set(distinct.values())) == 1,
+        "reasons_seen": distinct,
+    }
+
+    # The one that was true for two rounds without anybody noticing: the matrix
+    # axis cannot reach the texture floor, and it is published beside the scene
+    # that can.
+    floor = texture_floor()
+    out["texture_floor.reached"] = {
+        "how": "the matrix's own ground at every value of the texture axis; sensor "
+               "grain alone keeps it above the floor, so the axis cannot reach it",
+        "value": floor["matrix_axis_can_reach_the_floor"],
+    }
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--weights", type=Path, default=Path("models/plate_crnn.pt"))
@@ -236,8 +526,9 @@ def main() -> int:
     ap.add_argument(
         "--update-docs",
         action="store_true",
-        help="rewrite the cited figures in README.md and docs/CONTRACT.md from "
-             "what was just measured. The only supported way to change one.",
+        help="rewrite the cited figures AND the generated sections in README.md "
+             "and docs/CONTRACT.md from what was just measured. The only "
+             "supported way to change one.",
     )
     ap.add_argument(
         "--measure-noise",
@@ -263,14 +554,44 @@ def main() -> int:
 
     print("measuring the separation between vehicle and empty across the matrix ...")
     matrix_result = separation()
-    for texture, row in sorted(matrix_result.items()):
+    for label, row in sorted(matrix_result.items()):
         verdict = "separates" if row["separates"] else "DOES NOT SEPARATE"
-        print(f"  ground texture {texture}: {verdict}, margin {row['margin']}")
+        print(f"  {label}: {verdict}, margin {row['margin']}")
 
-    print("measuring where scattered weather stops the gate answering ...")
+    print("measuring what weather does to an empty lane, a vehicle and a metal plate ...")
     weather_result = weather(detector)
-    print(f"  answers `false` up to {weather_result['highest_coverage_still_answered_false']} "
-          "coverage, and declines above it")
+    print(f"  empty lane answers `false` up to "
+          f"{weather_result['highest_coverage_still_answered_false']}, reads OCCUPIED from "
+          f"{weather_result['lowest_coverage_reading_occupied']}, declines from "
+          f"{weather_result['lowest_coverage_declining_to_answer']}")
+    print(f"  the metal plate is admitted from {weather_result['metal_plate_admitted_from']}; "
+          f"vehicles refused: {weather_result['vehicle_refusals']}")
+
+    print("measuring a headlight pool on the floor, with and without the car ...")
+    headlight_result = headlights(detector)
+    held = headlight_result["highest_pool_still_empty"] or 0
+    tripped = headlight_result["lowest_pool_reading_occupied"] or 0
+    print(f"  empty lane holds to a pool of x{1 + held:g}, "
+          f"reads occupied from x{1 + tripped:g}; "
+          f"vehicles refused: {headlight_result['vehicle_refusals']}")
+
+    print("measuring the ground the structural comparison cannot serve ...")
+    floor_result = texture_floor()
+    bottom = min(floor_result["matrix_ground_reference_texture"].values())
+    print(f"  the matrix axis bottoms out at {bottom} grey levels, above the "
+          f"{floor_result['min_reference_texture']} floor; a smooth floor measures "
+          f"{floor_result['smooth_floor_reference_texture']} and is NOT MEASURED")
+
+    print("measuring which conditions share the reference_not_recognised reason ...")
+    conflation = conflated_reasons(detector)
+    shared = "ONE shared reason" if conflation["all_report_the_same_reason"] else "distinct"
+    print(f"  {len(conflation['causes'])} unrelated conditions, {shared}")
+
+    print("measuring the control that makes each published boolean false ...")
+    control_result = controls(detector)
+    for key, control in sorted(control_result.items()):
+        state = "false, as required" if control["value"] is False else "STILL TRUE"
+        print(f"  {key}: {state}")
 
     previous = json.loads(args.out.read_text()) if args.out.exists() else {}
 
@@ -299,6 +620,9 @@ def main() -> int:
         "confidence_transition": transition,
         "separation": matrix_result,
         "weather": weather_result,
+        "headlight": headlight_result,
+        "texture_floor": floor_result,
+        "conflated_reasons": conflation,
         "noise": noise,
         "gate": {
             "min_occupancy": detector.min_occupancy,
@@ -310,6 +634,7 @@ def main() -> int:
             "min_reference_match": detector.min_reference_match,
             "min_reference_texture": detector.min_reference_texture,
         },
+        "controls": control_result,
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -318,15 +643,19 @@ def main() -> int:
 
     if args.update_docs:
         values = figures(evidence)
+        rendered = blocks(evidence)
         for document in DOCUMENTS:
             path = ROOT / document
             before = path.read_text(encoding="utf-8")
-            after = rewrite(before, values)
+            after = rewrite(before, values, rendered)
             if after != before:
                 path.write_text(after, encoding="utf-8")
-                print(f"updated the figures cited in {document}")
+                print(f"updated the figures and generated sections in {document}")
             else:
                 print(f"{document} already matches the measurement")
+        missing = [key for key in BLOCKS if key not in rendered]
+        if missing:
+            print(f"WARNING: nothing rendered for {missing}")
     return 0
 
 

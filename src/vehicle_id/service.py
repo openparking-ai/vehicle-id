@@ -38,6 +38,13 @@ from urllib.parse import parse_qs, urlparse
 
 from .contract import SCHEMA_VERSION, Capture, Read, utc_now
 
+# `KNOWN_LIMITS` and `UNVALIDATED` are the gate's own disclosure text, not a copy
+# of it. The CLI prints the same constants at the moment somebody switches the
+# gate on; two seams stating different limitations is how a disclosure rots.
+# Neither this import nor `presence` itself pulls in cv2 -- the CI job that
+# proves the contract stands alone has none, and must keep passing.
+from .presence import KNOWN_LIMITS, UNVALIDATED
+
 log = logging.getLogger(__name__)
 
 #: How many recent reads the pull routes can still serve. A consumer that falls
@@ -147,8 +154,10 @@ class VehicleIdService:
             "presence_gate": getattr(self.engine, "_presence", None) is not None,
             # Stated in the health output because that is where an operator
             # looks, and because a capability reported without its status reads
-            # as a validated one. It is not.
-            "presence_validation": "unvalidated: synthetic scenes only, no real vehicle",
+            # as a validated one. It is not. Same source as the CLI's startup
+            # line, so the two seams cannot disclose different things.
+            "presence_validation": UNVALIDATED,
+            "presence_limits": list(KNOWN_LIMITS),
             # Named faults the gate has reported since start. A camera that
             # died at 3am is a run of these; a lane that is merely quiet is an
             # empty dict, and the two must not look the same from outside.
