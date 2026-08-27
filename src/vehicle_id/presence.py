@@ -250,6 +250,24 @@ CAMERA_FAULTS_CAVEAT = (
     "not send anybody out on that count alone"
 )
 
+#: What decides whether the weather limitation reaches a given lane, in ONE
+#: place, because it was in three and only one of them moved. `KNOWN_LIMITS`
+#: below, the evidence file's `topic` in `scripts/eval_presence.py` and the
+#: generated block in `scripts/measured_figures.py` all read this string.
+#:
+#: It names the STREAKS and never the cause, because the streaks are what was
+#: measured. The sweep's axis is coverage -- how much of the frame is broken up
+#: -- and `tests/lanes.py` draws rain and snow from one function. The three
+#: copies this replaces said "an open-air entry" or "rain falls in that camera's
+#: view"; both are narrower than the measurement, and narrow in the reassuring
+#: direction, so an operator at a covered entry with any bright-streak source in
+#: view reads them and concludes the limitation cannot reach him.
+STREAK_CONDITION = (
+    "bright streaks break up the camera's view of the ground, which rain and "
+    "snow both do; what was measured is how much of the frame they cover, not "
+    "what produced them"
+)
+
 #: The limitations, named. Each one is measured and published; see the presence
 #: section of README.md and docs/CONTRACT.md for the tables.
 #:
@@ -258,11 +276,11 @@ CAMERA_FAULTS_CAVEAT = (
 #: to appear here. A limitation cannot be measured without the operator turning
 #: the gate on being told about it.
 KNOWN_LIMITS = (
-    "on smooth ground -- sealed or painted concrete, which is what many covered "
-    "entries have -- it does not separate a vehicle from an empty lane at all",
-    "in an open-air entry, moderate rain makes an EMPTY lane read as occupied "
-    "before the gate gives up and returns null; a metal plate on the loop is "
-    "admitted in that band",
+    "on smooth ground -- sealed or painted concrete -- it does not separate a "
+    "vehicle from an empty lane at all",
+    "an EMPTY lane reads as occupied before the gate gives up and returns null, "
+    "and a metal plate on the loop is admitted in that band, wherever "
+    f"{STREAK_CONDITION}",
     "a bright enough headlight pool on the floor reads as occupied before the "
     "car that cast it is in frame",
     "no scene measured has produced `false` for a frame with a vehicle in it; "

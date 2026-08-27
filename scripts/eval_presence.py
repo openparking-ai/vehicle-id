@@ -56,7 +56,7 @@ from lanes import (  # noqa: E402
     smooth_floor,
     vehicle,
 )
-from vehicle_id.presence import PresenceDetector  # noqa: E402
+from vehicle_id.presence import STREAK_CONDITION, PresenceDetector  # noqa: E402
 
 EVIDENCE = Path("docs/measured/presence.json")
 
@@ -661,8 +661,11 @@ def limitations(sep: dict, weather_result: dict, headlight_result: dict,
     if weather_result["lowest_coverage_reading_occupied"] is not None:
         found.append({
             "measured_in": "weather",
-            "topic": "an empty lane reads as occupied in an open-air entry in rain",
-            "seam_word": "moderate rain",
+            "topic": f"an empty lane reads as occupied wherever {STREAK_CONDITION}",
+            # The phrase only this disclosure contains, and it moved with the
+            # wording: "moderate rain" named a cause the measurement never
+            # isolated. Coverage of the frame by streaks is the axis.
+            "seam_word": "bright streaks",
         })
     if weather_result["metal_plate_admitted_from"] is not None:
         found.append({

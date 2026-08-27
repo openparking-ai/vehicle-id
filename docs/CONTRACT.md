@@ -409,7 +409,7 @@ The band from 10% is the one to read. `presence: true` with `outcome: "fallback"
 
 **And the fraud is admitted with it.** The metal plate on the loop — the case this gate exists for — is correctly refused up to 5% coverage and then **transacts from 10%**, on the same streaks. In that band the gate does not merely lose the ability to say `false`; it issues the ticket for the exact scene it was built to refuse.
 
-This is a measured REGRESSION against the intensity measure that preceded it, which called heavy rain an empty lane correctly. It is recorded rather than argued away. **Whether it reaches a given entry depends on whether rain falls in that camera's view** — which the operator can see and this project cannot count. NOT MEASURED on any real frame (0 have ever been through this gate), and no frequency is claimed either way. Across the sweep, 0 of 8 vehicle scenes were refused.
+This is a measured REGRESSION against the intensity measure that preceded it, which called heavy rain an empty lane correctly. It is recorded rather than argued away. **Whether it reaches a given entry depends on whether bright streaks break up the camera's view of the ground, which rain and snow both do; what was measured is how much of the frame they cover, not what produced them.** The operator can see that and this project cannot count it. NOT MEASURED on any real frame (0 have ever been through this gate), and no frequency is claimed either way. Across the sweep, 0 of 8 vehicle scenes were refused.
 <!--/mb-->
 
 <!--mb:presence.headlight-->

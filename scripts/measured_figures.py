@@ -58,6 +58,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+# The weather scope is the gate's own disclosure text, read rather than
+# re-typed. It was hand-written here, hand-written at the seam and hand-written
+# into the evidence file, and a round that corrected one of the three left the
+# other two standing.
+from vehicle_id.presence import STREAK_CONDITION
+
 EVIDENCE = Path("docs/measured/presence.json")
 SPAN = re.compile(r"<!--m:([a-z0-9_.]+)-->(.*?)<!--/m-->", re.DOTALL)
 # The body may not contain another marker. Without that guard an EMPTY
@@ -488,8 +494,8 @@ def _weather_scope(evidence: dict) -> str:
         "This is a measured REGRESSION against the intensity measure that preceded "
         "it, which called heavy rain an empty lane correctly. It is recorded rather "
         "than argued away. **Whether it reaches a given entry depends on whether "
-        "rain falls in that camera's view** — which the operator can see and this "
-        f"project cannot count. {real}, and no frequency is claimed either way. "
+        f"{STREAK_CONDITION}.** The operator can see that and this project cannot "
+        f"count it. {real}, and no frequency is claimed either way. "
         f"Across the sweep, {refusals} of {cells} vehicle scenes were refused."
     )
 
