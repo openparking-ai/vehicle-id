@@ -411,9 +411,10 @@ def conflated_reasons() -> dict:
     X4. The fourth cause is the one that makes this a product finding rather
     than a documentation one, and it came out of the matrix that was already
     being measured: an ORDINARY vehicle -- 43.75% of the frame, not one filling
-    it -- on low-texture ground, under a beam pool, lands on the same reason. An arriving car is counted under
-    `camera_faults`. It is measured here as the matrix builds it, reference and
-    all, so that the scene in the document is the scene in the sweep.
+    it -- on low-texture ground, under a beam pool, lands on the same reason.
+    An arriving car is counted under `camera_faults`. It is measured here as
+    the matrix builds it, reference and all, so that the scene in the document
+    is the scene in the sweep.
     """
     from vehicle_id.plates.generator import PlateGenerator
 
