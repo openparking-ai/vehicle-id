@@ -184,7 +184,14 @@ class _Handler(BaseHTTPRequestHandler):
             # nonsense" from "try again later".
             return self._json(400, {"error": str(exc)})
 
-        seq, read = self.service.identify(captures)
+        try:
+            seq, read = self.service.identify(captures)
+        except Exception:
+            # The engine is not allowed to take the connection down with it. A
+            # dropped connection reads as "the service is gone" to a consumer,
+            # which is a different problem with a different remedy.
+            log.exception("identification failed")
+            return self._json(500, {"error": "identification failed"})
         return self._json(200, {"cursor": seq, "read": read.to_dict()})
 
     # --- plumbing --------------------------------------------------------
@@ -210,15 +217,24 @@ def _captures_from(body: bytes, content_type: str, camera_header: str | None) ->
             payload = json.loads(body)
         except json.JSONDecodeError as exc:
             raise ValueError(f"body is not valid JSON: {exc}") from exc
+        # Valid JSON is not a valid request. A list, a string and a null are all
+        # well-formed JSON, and every one of them used to reach `.get` and kill
+        # the handler mid-response -- which a caller cannot tell apart from the
+        # service being down, so its retry loop backs off forever instead of
+        # fixing the request.
+        if not isinstance(payload, dict):
+            raise ValueError(f"body must be a JSON object, got {type(payload).__name__}")
         camera_id = payload.get("camera_id") or camera_header or "unknown"
         entries = payload.get("captures")
         if not isinstance(entries, list) or not entries:
             raise ValueError("captures must be a non-empty list")
         captures = []
         for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError(f"each capture must be an object, got {type(entry).__name__}")
             encoded = entry.get("image_b64")
-            if not encoded:
-                raise ValueError("each capture needs image_b64")
+            if not encoded or not isinstance(encoded, str):
+                raise ValueError("each capture needs image_b64, as a string")
             try:
                 image_bytes = base64.b64decode(encoded, validate=True)
             except Exception as exc:

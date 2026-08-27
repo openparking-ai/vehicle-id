@@ -33,6 +33,10 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 5.0
 
+#: How often a pusher with something outstanding tries again on its own,
+#: rather than waiting for the next vehicle to arrive.
+DEFAULT_RETRY_INTERVAL = 15.0
+
 
 @dataclass
 class PushStats:
@@ -60,6 +64,10 @@ class ReadQueue:
             fh.flush()
 
     def load(self) -> list[Read]:
+        with self._lock:
+            return self._load_unlocked()
+
+    def _load_unlocked(self) -> list[Read]:
         if not self.path.exists():
             return []
         reads = []
@@ -68,18 +76,27 @@ class ReadQueue:
                 reads.append(Read.from_dict(json.loads(line)))
         return reads
 
-    def replace(self, reads: list[Read]) -> None:
-        """Rewrite the queue with what is still outstanding.
+    def settle(self, settled: set[str]) -> None:
+        """Remove exactly the reads named, and nothing else.
 
-        Written to a sibling then moved, so an interruption leaves either the
-        old queue or the new one and never a half-written file.
+        Deliberately NOT "rewrite the queue with what is left over", which is
+        how this was first written and how it lost reads. A delivery attempt
+        takes seconds; another request thread appends during it; rewriting the
+        file from a snapshot taken before that append truncates the new read
+        off the queue forever -- and it had already been answered 200.
+
+        Re-reading under the lock and removing by identity means anything that
+        arrived mid-flight is still there afterwards.
         """
         with self._lock:
+            keep = [read for read in self._load_unlocked() if read.read_id not in settled]
             scratch = self.path.with_suffix(self.path.suffix + ".partial")
             with scratch.open("w", encoding="utf-8") as fh:
-                for read in reads:
+                for read in keep:
                     fh.write(json.dumps(read.to_dict()) + "\n")
                 fh.flush()
+            # Written to a sibling then moved, so an interruption leaves either
+            # the old queue or the new one and never a half-written file.
             scratch.replace(self.path)
 
     def __len__(self) -> int:
@@ -94,12 +111,21 @@ class ReadPusher:
         url: str,
         queue_path: Path,
         timeout: float = DEFAULT_TIMEOUT,
+        retry_interval: float = DEFAULT_RETRY_INTERVAL,
         opener=None,
     ) -> None:
         self.url = url
         self.queue = ReadQueue(queue_path)
         self.timeout = timeout
+        self.retry_interval = retry_interval
         self.stats = PushStats()
+        # Only one flush runs at a time. Two concurrent flushers would each
+        # load the same outstanding read and deliver it twice -- survivable,
+        # because read_id is stable and consumers deduplicate on it, but there
+        # is no reason to make them do that work.
+        self._flushing = threading.Lock()
+        self._stop = threading.Event()
+        self._retrier: threading.Thread | None = None
         # Injected so the tests exercise the real retry and refusal logic
         # against a stub, rather than testing a mock of the logic itself.
         self._open = opener or _post
@@ -109,41 +135,67 @@ class ReadPusher:
         self.queue.append(read)
         self.flush()
 
+    def start(self) -> None:
+        """Flush now, and keep retrying on a timer.
+
+        Both halves matter and neither is optional. Without the flush at start,
+        reads outstanding when the process died wait for the next vehicle --
+        which, for the last car of the night, is the next morning. Without the
+        timer, retry is coupled to new traffic, so a consumer that comes back
+        during a quiet hour is not noticed until someone drives in.
+        """
+        self.flush()
+        if self._retrier is None:
+            self._retrier = threading.Thread(target=self._retry_loop, daemon=True)
+            self._retrier.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _retry_loop(self) -> None:
+        while not self._stop.wait(self.retry_interval):
+            if self.stats.pending:
+                self.flush()
+
     def flush(self) -> PushStats:
-        outstanding = self.queue.load()
-        if not outstanding:
-            self.stats.pending = 0
+        with self._flushing:
+            outstanding = self.queue.load()
+            if not outstanding:
+                self.stats.pending = 0
+                return self.stats
+
+            settled: set[str] = set()
+            deferred = 0
+            for read in outstanding:
+                if deferred:
+                    # Order is preserved: once one delivery fails, everything
+                    # behind it waits. A consumer that receives an exit before
+                    # the entry it belongs to prices the stay wrong.
+                    break
+                try:
+                    self._open(self.url, read.to_dict(), self.timeout)
+                except Refused as refusal:
+                    self.stats.refused += 1
+                    settled.add(read.read_id)
+                    log.warning(
+                        "consumer refused read %s with %s; dropping it rather than "
+                        "blocking the queue behind it",
+                        read.read_id,
+                        refusal.status,
+                    )
+                except Exception as exc:  # transport, timeout, consumer down
+                    log.info("delivery of read %s deferred: %s", read.read_id, exc)
+                    deferred += 1
+                else:
+                    self.stats.delivered += 1
+                    settled.add(read.read_id)
+
+            # Remove exactly what was settled. Anything appended by another
+            # thread while the deliveries above were in flight is still on the
+            # queue afterwards, which is the whole point.
+            self.queue.settle(settled)
+            self.stats.pending = len(self.queue)
             return self.stats
-
-        remaining: list[Read] = []
-        blocked = False
-        for read in outstanding:
-            if blocked:
-                # Order is preserved: once one delivery fails, everything behind
-                # it waits. A consumer that receives an exit before the entry it
-                # belongs to is a consumer that prices the stay wrong.
-                remaining.append(read)
-                continue
-            try:
-                self._open(self.url, read.to_dict(), self.timeout)
-            except Refused as refusal:
-                self.stats.refused += 1
-                log.warning(
-                    "consumer refused read %s with %s; dropping it rather than "
-                    "blocking the queue behind it",
-                    read.read_id,
-                    refusal.status,
-                )
-            except Exception as exc:  # transport, timeout, consumer down
-                log.info("delivery of read %s deferred: %s", read.read_id, exc)
-                remaining.append(read)
-                blocked = True
-            else:
-                self.stats.delivered += 1
-
-        self.queue.replace(remaining)
-        self.stats.pending = len(remaining)
-        return self.stats
 
 
 class Refused(Exception):
