@@ -339,20 +339,22 @@ This is a measured REGRESSION against the intensity measure that preceded it, wh
 <!--/mb-->
 
 <!--mb:presence.headlight-->
-**Headlights on the floor.** A car with its beams on throws them into frame before the car itself arrives — a large change in the scene caused by a vehicle that is not yet the vehicle. Measured over 8 pools, with and without the car that cast them. `pool` is the beam's peak as a multiple of ambient ADDED to it, so the table states peak = 1 + pool.
+**Headlights on the floor.** A car with its beams on throws them into frame before the car itself arrives — a large change in the scene caused by a vehicle that is not yet the vehicle. Measured over 8 pools at ambient level 90, with and without the car that cast them. The published figure is the beam's PEAK as a multiple of ambient; the evidence stores what the beam adds, and peak = pool + 1. Both columns are here so the conversion is on the page.
 
-| beam pool, peak x ambient | empty lane (car not yet in frame) | vehicle |
-|---|---|---|
-| x1 | `false` 0.001 | `true` 0.428 |
-| x1.5 | `false` 0.000 | `true` 0.442 |
-| x2 | `false` 0.000 | `true` 0.447 |
-| x3 | `false` 0.001 | `true` 0.453 |
-| x4 | `true` 0.205 | `true` 0.498 |
-| x5 | `true` 0.335 | `true` 0.540 |
-| x7 | `true` 0.477 | `true` 0.639 |
-| x9 | `true` 0.804 | `true` 0.667 |
+| beam pool, peak x ambient | pool, as stored | ambient level | empty lane (car not yet in frame) | vehicle |
+|---|---|---|---|---|
+| x1 | 0 | 90 | `false` 0.001 | `true` 0.428 |
+| x1.5 | 0.5 | 90 | `false` 0.000 | `true` 0.442 |
+| x2 | 1 | 90 | `false` 0.000 | `true` 0.447 |
+| x3 | 2 | 90 | `false` 0.001 | `true` 0.453 |
+| x4 | 3 | 90 | `true` 0.205 | `true` 0.498 |
+| x5 | 4 | 90 | `true` 0.335 | `true` 0.540 |
+| x7 | 6 | 90 | `true` 0.477 | `true` 0.639 |
+| x9 | 8 | 90 | `true` 0.804 | `true` 0.667 |
 
-An empty lane holds at `false` up to a pool of x3 ambient and reads as OCCUPIED from x4 — the beams of a car that has not arrived open a transaction for it.
+At ambient level 90, an empty lane holds at `false` up to a pool of x3 ambient and reads as OCCUPIED from x4 — the beams of a car that has not arrived open a transaction for it.
+
+**That boundary is a property of this sweep, not of the gate.** It was measured at 1 ambient level — 90 — and it MOVES with that level: the lane is clipped to 8 bits after the pool multiplies, so how much of the frame saturates, and therefore where the boundary falls, depends on how bright the lane was to begin with. **How it moves is NOT MEASURED**, and the level the reference is captured at is a fixture choice nothing has measured either. Read the number as: this is what happened at this one level.
 
 0 of 8 vehicle scenes were refused. **The model is a limitation of these numbers**: multiplicative pool on a matte floor; no specular glare, no beam cut-off. A gloss or wet floor at night is a specular scene and this is a matte one. NOT MEASURED on any real frame (0 have ever been through this gate).
 <!--/mb-->

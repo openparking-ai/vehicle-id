@@ -69,6 +69,14 @@ GRAIN = 0.035
 #: Where a car's beams land on the floor of a covered entry, as a fraction of
 #: the frame. Centred low and ahead: the camera looks down the lane, and the
 #: pool arrives before the car does.
+#:
+#: **AN UNMEASURED FIXTURE CHOICE, and labelled as one rather than argued for.**
+#: It rests on CAMERA POSE -- where a lane camera is mounted and what it is
+#: pointed at -- and on nothing else; in particular it does not rest on the
+#: deleted claim about how covered entries are lit, which shares only the words
+#: "covered entry" with it. No measurement of real beam geometry exists, and
+#: none can before there is footage, so no number taken against this pool is a
+#: property of a real entry.
 BEAM_CENTRE = (0.50, 0.72)
 BEAM_SPREAD = (0.30, 0.28)
 
@@ -134,12 +142,23 @@ def lane(
     serve; welded on, it could not.
 
     `headlight` is the peak of a beam pool on the floor, as a MULTIPLE of the
-    ambient light there -- so the axis is scale-free and carries no claim about
-    how bright or dark a real entry is. That matters: this parameter used to be
-    justified by "a covered entry is artificially lit and often dark", an
-    unmeasured frequency about real garages, and a fixture is part of the
-    measurement. Deleting the sentence moves no number here, because `_beam`
-    multiplies rather than adds and the axis never read the claim.
+    ambient light there. This parameter used to be justified by "a covered entry
+    is artificially lit and often dark", an unmeasured frequency about real
+    garages; the sentence is deleted and a fixture is part of the measurement.
+
+    **The axis is NOT scale-free, and two earlier claims here that it was are
+    deleted rather than repaired.** `_beam` multiplies, but this function clips
+    to uint8 afterwards, and saturation is what destroys the structure the
+    measure reads: at `level=90` a pool of 8 saturates 65.9% of the frame and at
+    `level=30` it saturates 9.8%. So `level` decides where a pool stops being
+    tolerated -- x3 ambient at level 90, x6 at 60, x8 at 45, never within this
+    sweep at 30 -- and `level=90` is an unmeasured fixture pin that the
+    published boundary depends on. It is pinned because the reference is
+    captured there, not because anything measured a real entry; the deleted
+    lighting claim justified THIS parameter, never the ambient pin. Crossing the
+    two axes is January's work with real footage, so the dependence is stated
+    and NOT MEASURED. Where it is published, the ambient level is published
+    beside it.
 
     A car with its beams on throws them into frame BEFORE the car itself
     arrives -- a large scene change caused by a vehicle that is not yet the
@@ -332,9 +351,12 @@ HEADLIGHTS = (0.0, 2.0)
 #: verdict turns on the MEASURE rather than on the object being the wrong size.
 VEHICLE_SIZE = (420, 240)
 
-#: Where a beam pool stops being tolerated. Swept as its own sweep rather than
-#: as a matrix axis for the same reason weather is: the interesting output is a
-#: BOUNDARY, and a boundary needs samples along it, not two points.
+#: Where a beam pool stops being tolerated AT ONE AMBIENT LEVEL. Swept as its
+#: own sweep rather than as a matrix axis for the same reason weather is: the
+#: interesting output is a BOUNDARY, and a boundary needs samples along it, not
+#: two points. The boundary moves with `level` -- see `lane()` -- so the level
+#: it was measured at travels with the number wherever it is published, and 8.0
+#: is the top of the sweep rather than the end of the axis.
 HEADLIGHT_LEVELS = (0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0)
 
 
