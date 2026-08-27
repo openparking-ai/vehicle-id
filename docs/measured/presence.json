@@ -601,8 +601,8 @@
     },
     {
       "measured_in": "weather",
-      "topic": "an empty lane reads as occupied in an open-air entry in rain",
-      "seam_word": "moderate rain"
+      "topic": "an empty lane reads as occupied wherever bright streaks break up the camera's view of the ground, which rain and snow both do; what was measured is how much of the frame they cover, not what produced them",
+      "seam_word": "bright streaks"
     },
     {
       "measured_in": "weather",
