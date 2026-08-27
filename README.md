@@ -161,7 +161,9 @@ ladder:
 > *differently* every frame and the batch then disagrees with itself:
 > <!--m:noise.one_capture-->1.9% mean, 0.0-4.0% across 12 seeds x 150 reads<!--/m--> at one capture,
 > <!--m:noise.three_capture-->1.4% mean, 0.7-3.3% across 12 seeds x 150 reads<!--/m--> at three.
-> **It does not reach zero.**
+> **It does not reach zero.** Measured on weights
+> <!--m:noise.weights-->sha256:0de21983b58b0ecd<!--/m--> — a rate is meaningless
+> without the model it describes, so it is published with one.
 >
 > With a reference view of the empty lane in front of it, the presence gate
 > takes the same measurement to <!--m:noise.gated_one_capture-->0.0% (12 seeds x 150 reads, 1800 in total, none)<!--/m-->
@@ -212,8 +214,19 @@ is not.
 So it is answered the way a fixed camera on fixed tarmac makes possible: how much
 of the scene changed, in one contiguous region. A vehicle fills a large part of
 the frame. A person holding a plate does not, and neither does rain, a bird or a
-shadow — scattered change across 45% of the frame reads as **absent**, because
-only the largest connected region counts.
+shadow — because only the largest connected region counts.
+
+**Structure, not brightness.** A window counts as changed when it has lost more
+than <!--m:gate.min_structural_change-->0.5<!--/m--> of its structural agreement
+with the reference — the contrast and structure terms of SSIM, with the
+luminance term deliberately dropped. Deciding on the size of an intensity
+difference instead is blind to a vehicle the same brightness as the ground:
+under the previous measure a car occupying 43.75% of the frame — nearly three
+times the occupancy floor — read `presence: false` at 0.97 confidence for any
+body shade within about 30 grey levels of the tarmac. That is an ordinary grey
+car on grey asphalt, `false` is the value that ends a transaction, and moving
+the threshold only moves the band. A car at the tarmac's own luminance still
+occludes the tarmac's texture, and that is what is measured now.
 
 ### Three states, and the two of them that are not a verdict
 
@@ -250,18 +263,58 @@ have. Three things changed:
   vans, trucks and buses that legitimately fill an entry lane, and at the lane
   that is no ticket, no session and no vend for a customer who is really there.
 
+> ### UNVALIDATED AGAINST REAL VEHICLES. OPT-IN, AND OFF UNTIL YOU TURN IT ON.
+>
+> **Every number below describes synthetic scenes.** Rectangles on a drawn lane,
+> photographed by nothing. No frame of real footage has ever been put through
+> this gate. It is **off unless you configure a reference view** — without one
+> presence is `null` and the lane behaves exactly as it did before this stage
+> existed — and a garage that switches it on is choosing an unvalidated
+> measurement, knowingly. That is the whole basis on which it ships.
+>
+> Two rounds of adversarial review each found this gate measuring something
+> other than presence, and each was found by inventing a probe nobody had
+> thought of. That process does not terminate on synthetic data. Real lane
+> footage is the only thing that ends it, and it does not exist yet.
+>
+> **What the measure gave, on the matrix, unedited.**
+> <!--m:separation.cells-->54<!--/m--> cells sweeping vehicle/ground contrast
+> through the exactly-invisible case, ground texture, and the vehicle's own
+> surface grain. It separates vehicle from empty at ground texture
+> <!--m:separation.textures_that_work-->1.0, 2.0<!--/m--> with a worst-case
+> occupancy margin of <!--m:separation.margin-->0.42<!--/m-->, and it **does
+> not separate** at texture
+> <!--m:separation.textures_that_fail-->0.25<!--/m-->, where an empty lane
+> reads as occupied. On near-featureless ground the measure has nothing to
+> recognise and this gate gives you nothing — including no protection against
+> the metal-plate case it exists for.
+>
+> **It cost capability in weather.** The measure it replaced called heavy rain
+> an empty lane correctly. This one answers `false` only up to
+> <!--m:weather.answers_up_to-->5% of the frame in streaks<!--/m--> and stops
+> answering above that: an 11px window catches a streak almost anywhere, so
+> scatter decorrelates the frame instead of being opened away. That is a
+> regression, it is recorded rather than argued away, and it fails to `null` —
+> a ticket and a human — rather than to a refusal.
+>
+> **The one thing that holds everywhere measured**: no cell of the matrix, and
+> no rain coverage, produced `false` for a frame with a vehicle in it —
+> <!--m:separation.refusals-->0<!--/m--> wrongful refusals. Where this gate
+> fails, it fails toward a human.
+>
 > **What is measured and what is not.** This gate can be shown to reject sensor
-> noise, a flat or blown frame, a plate-sized object and heavy rain; to hold an
+> noise, a flat or blown frame and a plate-sized object; to hold an
 > empty lane at `false` across the exposure range above; and to admit a lane
-> with a vehicle in it — all of which are in the test suite, and the ones that
+> with a vehicle in it at every contrast tested — all of which are in the test suite, and the ones that
 > need no weights run on every commit. Its behaviour on **real vehicles at a
 > real lane is NOT MEASURED**, and will stay that way until the physical bench
 > exists. The occupancy floor of <!--m:gate.min_occupancy-->15%<!--/m--> is
 > an **assumption**, not a measurement: it cannot be measured without lane
 > footage, so it is a documented, configurable number rather than a constant
 > presented as a finding. So is the ceiling, and so is the
-> <!--m:gate.pixel_delta-->30<!--/m-->-grey-level step that decides whether
-> a pixel changed.
+> <!--m:gate.min_structural_change-->0.5<!--/m--> loss of structural agreement,
+> over a <!--m:gate.window-->11<!--/m-->px window, that decides whether a window
+> changed.
 >
 > **Every figure in this file is produced by a command**, written to
 > `docs/measured/presence.json` by `scripts/eval_presence.py`, and checked

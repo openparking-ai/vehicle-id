@@ -109,6 +109,17 @@ def _presence(args):
     if reference is None:
         print(f"could not read {args.empty_lane}", file=sys.stderr)
         raise SystemExit(2)
+    # Said here because this is the moment somebody chooses it. The contract and
+    # the README say the same thing, and neither is read by the person typing
+    # the flag at 6am. Presence is off by default precisely so that turning it
+    # on is a decision, and a decision nobody was told about is not one.
+    print(
+        "presence gate ON, and UNVALIDATED: it has never been measured against a "
+        "real vehicle, only against synthetic scenes. It gives nothing on "
+        "untextured ground and stops answering in heavy weather. See the "
+        "presence section of README.md.",
+        file=sys.stderr,
+    )
     return PresenceDetector(reference=reference, min_occupancy=args.min_occupancy)
 
 

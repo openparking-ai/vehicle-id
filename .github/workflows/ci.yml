@@ -102,16 +102,14 @@ jobs:
               cv2.imwrite(str(out / f"plate{i}.png"), sample.image)
           PY
 
-      - name: Is the presence gate CONNECTED? No weights needed, so no skips
-        # BEFORE the model is trained, deliberately. Whether the gate is wired
-        # into the engine is answerable with a stub recogniser at a fixed
-        # confidence, and keeping it answerable without weights is what stops it
-        # skipping -- three of these guarantees skipped in every run for a
-        # fortnight while this job stayed green.
-        #
-        # No VEHICLE_ID_ALLOW_SKIPPED here on purpose: nothing in these files is
-        # allowed to skip in this job, and the run fails if it does.
-        run: pytest tests/test_presence_wiring.py tests/test_presence.py -q
+      - name: Is the presence gate CONNECTED, and does it MOVE the number?
+        # Both halves, and neither needs weights. Connectedness is a stub
+        # recogniser at a fixed confidence; "the gate moves the number" is the
+        # same stub answering every noisy frame confidently, so the ungated
+        # control is satisfied by construction instead of by luck. The accuracy
+        # version in test_plates.py may skip; this may not, and the run below
+        # names no allowance on purpose.
+        run: pytest tests/test_presence_wiring.py tests/test_presence.py tests/test_skip_guard.py -q
 
       - name: Engine tests, including never-wrong-silently
         # The accuracy half, which genuinely needs weights better than the small
@@ -145,17 +143,43 @@ jobs:
         # gate does and the check compares it with what README.md and
         # docs/CONTRACT.md say. A figure edited by hand turns this red.
         #
-        # The noise rates need real weights, so this run measures the gate's
-        # geometry and keeps the recorded rates; the comparison still covers
-        # both, because the evidence file is committed.
+        # NOTE what this deliberately does NOT do: re-measure the noise rates.
+        # It used to, and it was wrong. Those rates describe a RECOGNISER, this
+        # job trains a 600-step model at the same path the release weights live
+        # at, and that model answers zero on noise -- so the job replaced a
+        # figure measured on one model with a figure measured on another and
+        # reported the difference as drift. A comparison between two different
+        # models is not a check. Re-measuring is now an explicit act
+        # (`--measure-noise`) performed with real weights, and the rates carry
+        # the digest of the weights that produced them.
         run: |
-          python scripts/eval_presence.py --weights models/plate_crnn.pt
+          python scripts/eval_presence.py
           git diff --exit-code docs/measured/presence.json || {
             echo "the gate's measured geometry has changed but docs/measured/presence.json was not updated"
             echo "run: python scripts/eval_presence.py --update-docs"
             exit 1
           }
           pytest tests/test_measured_docs.py -q
+
+      - name: No published rate without the artefact it was measured on
+        # G4a as a check rather than a convention. A rate whose weights nobody
+        # recorded cannot be reproduced, compared, or believed -- the contract
+        # demands `weights_id` of every record the engine emits, and a figure in
+        # a document is held to the same standard.
+        run: |
+          python - <<'PY'
+          import json, sys
+          noise = json.load(open("docs/measured/presence.json")).get("noise")
+          if noise is None:
+              print("no noise rates recorded; nothing to check"); sys.exit(0)
+          digest = noise.get("weights_id")
+          assert digest and digest.startswith("sha256:"), (
+              f"the published noise rates name no weights ({digest!r}). "
+              "Re-measure with: python scripts/eval_presence.py --measure-noise "
+              "--weights <the real weights>"
+          )
+          print(f"noise rates measured on {digest}")
+          PY
 
       - name: The CLI reads a folder with no system present
         # The definition of done, run as a check: someone with no parking

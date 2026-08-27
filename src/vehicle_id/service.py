@@ -145,6 +145,10 @@ class VehicleIdService:
             },
             "threshold_applied": self.engine.threshold,
             "presence_gate": getattr(self.engine, "_presence", None) is not None,
+            # Stated in the health output because that is where an operator
+            # looks, and because a capability reported without its status reads
+            # as a validated one. It is not.
+            "presence_validation": "unvalidated: synthetic scenes only, no real vehicle",
             # Named faults the gate has reported since start. A camera that
             # died at 3am is a run of these; a lane that is merely quiet is an
             # empty dict, and the two must not look the same from outside.

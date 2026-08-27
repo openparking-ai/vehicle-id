@@ -198,3 +198,61 @@ def test_a_record_can_never_carry_a_plate_with_presence_false(gate):
     assert read.presence is False
     assert read.identity.plate is None
     assert not read.is_answer
+
+
+# --- G4c: the gate MOVES the number, proven without weights ---------------
+
+@guarantee
+def test_the_gate_moves_the_noise_answer_rate_with_no_weights_at_all():
+    """D6's wiring half, and the resolution of a conflict in the brief.
+
+    The accuracy version of this lives in `test_plates.py`, needs weights that
+    actually read plates, and is allowed to skip in the engine job. That made
+    the control which proves the gate does anything the one thing that never
+    ran in CI -- and the job that DID publish the number trained a 600-step
+    model which answers zero on noise, so its ungated control could not have
+    been satisfied either. A comparison of 0.0% against 0.0% is not evidence.
+
+    Whether the gate MOVES the number needs no model. The recogniser is a seam;
+    a stub that always answers confidently is the worst case a gate could face,
+    and it makes the ungated arm answer 100% by construction rather than by
+    luck. That removes the reason this ever skipped.
+
+    Both arms are measured in the same run, so neither number is assumed.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    batches = []
+    for _ in range(60):
+        frame = rng.integers(0, 255, (160, 320, 3), dtype=np.uint8)
+        batches.append([capture(frame, camera_id="dead-feed")])
+
+    gated = engine_with(PresenceDetector(reference=lane(90, seed=1)), StubRecognizer())
+    ungated = engine_with(None, StubRecognizer())
+
+    ungated_answers = sum(ungated.read(b).is_answer for b in batches)
+    gated_answers = sum(gated.read(b).is_answer for b in batches)
+
+    # The control, measured rather than assumed. If the ungated arm answered
+    # zero the assertion below would pass with the gate removed.
+    assert ungated_answers == len(batches), (
+        f"the ungated control answered {ungated_answers}/{len(batches)}; with a "
+        "stub that always answers confidently it must answer every one, or the "
+        "assertion below proves nothing"
+    )
+    assert gated_answers == 0, (
+        f"{gated_answers}/{len(batches)} dead-feed reads got past the presence "
+        f"gate (ungated control: {ungated_answers}/{len(batches)})"
+    )
+
+
+@guarantee
+def test_the_gate_does_not_move_the_number_by_refusing_everything():
+    """The control that matters more, again. A gate that stopped every read
+    would post a perfect noise score and break the product."""
+    gated = engine_with(PresenceDetector(reference=lane(90, seed=1)), StubRecognizer())
+    read = gated.read([capture(vehicle(420, 240, seed=44))])
+    assert read.presence is True
+    assert read.identity.plate == "7ABC123"
+    assert read.is_answer
