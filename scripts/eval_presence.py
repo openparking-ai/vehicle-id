@@ -318,10 +318,9 @@ def weather(detector, coverages=RAIN_COVERAGES) -> dict:
 def headlights(detector, amounts=HEADLIGHT_LEVELS) -> dict:
     """A beam pool on the floor, with and without the car that cast it.
 
-    M3's axis. A covered entry is artificially lit and often dark, and an
-    approaching car throws its beams into frame BEFORE the car does. That is a
-    large change in the scene caused by a vehicle that is not yet the vehicle,
-    and nothing had measured what this gate makes of it.
+    M3's axis. A car with its beams on throws them into frame BEFORE the car
+    does. That is a large change in the scene caused by a vehicle that is not
+    yet the vehicle, and nothing had measured what this gate makes of it.
 
     The empty-lane row is the interesting one: it is the second before a car
     arrives, and a `true` there is a transaction opened for a vehicle that has
