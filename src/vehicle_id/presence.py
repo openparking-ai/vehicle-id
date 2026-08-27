@@ -227,8 +227,36 @@ UNVALIDATED = (
     "only against synthetic scenes."
 )
 
+#: What a `reference_not_recognised` count on `GET /v1/health` does and does not
+#: mean. Defined once and published at BOTH seams -- as one of `KNOWN_LIMITS`,
+#: which the CLI prints and health lists, and beside the fault count itself.
+#:
+#: K3's interim disclosure. The reason cannot be split without a measurement
+#: this release does not make (see `OPENPARKING_SETTLED.md`, the P-round), and
+#: relabelling the branch would trade a false page for a MISSING one on the
+#: knocked camera. So it is disclosed instead -- and disclosed HERE rather than
+#: only in two documents, because the count is emitted at this seam and an
+#: operator reading it is the person who would send a technician.
+#:
+#: The fourth condition is the one that is not a document problem: an ordinary
+#: vehicle -- not one filling the frame -- on low-texture ground under a beam
+#: pool lands on the same reason, so an arriving car is counted as a fault. It
+#: is measured in `docs/measured/presence.json` under `conflated_reasons`.
+CAMERA_FAULTS_CAVEAT = (
+    "a `reference_not_recognised` count under camera_faults is NOT a confirmed "
+    "equipment fault: one reason covers a camera that moved, a scene rebuilt "
+    "overnight, heavy weather, and an ordinary vehicle arriving on low-texture "
+    "ground under a headlight pool -- this build cannot tell them apart, so do "
+    "not send anybody out on that count alone"
+)
+
 #: The limitations, named. Each one is measured and published; see the presence
 #: section of README.md and docs/CONTRACT.md for the tables.
+#:
+#: `docs/measured/presence.json` publishes a `limitations` list produced by the
+#: measurement, and `tests/test_measured_docs.py` requires every word it names
+#: to appear here. A limitation cannot be measured without the operator turning
+#: the gate on being told about it.
 KNOWN_LIMITS = (
     "on smooth ground -- sealed or painted concrete, which is what many covered "
     "entries have -- it does not separate a vehicle from an empty lane at all",
@@ -239,6 +267,7 @@ KNOWN_LIMITS = (
     "car that cast it is in frame",
     "no scene measured has produced `false` for a frame with a vehicle in it; "
     "where it fails, it fails to null -- a ticket and a human",
+    CAMERA_FAULTS_CAVEAT,
 )
 
 

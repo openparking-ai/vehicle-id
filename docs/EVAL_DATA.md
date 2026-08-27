@@ -84,10 +84,13 @@ rather than notes on it:
   comparable between images taken the way a lane camera takes them: the whole
   entry in frame, in focus, at the light the lane actually has.
 - **It says whether the gate can ANSWER, not whether it will answer well.** The
-  floor is the point below which the gate returns `null`. Sitting above it is
-  necessary and not sufficient — the fixture's own 0.25-texture row measures
-  3.82 grey levels, comfortably above the floor, and still fails to separate a
-  vehicle from an empty lane at all.
+  floor is the point below which the gate returns `null` — measured at
+  <!--m:gate.min_reference_texture-->1.5<!--/m--> grey levels. Sitting above it
+  is necessary and not sufficient: the fixture's own 0.25-texture row measures
+  <!--m:texture_floor.matrix_lowest-->3.821<!--/m--> grey levels, comfortably
+  above the floor, and still fails to separate a vehicle from an empty lane at
+  all. The scene that does reach the floor measures
+  <!--m:texture_floor.smooth_floor-->0.67<!--/m-->.
 
 Photographs of real floors are **never committed to this repository**, the same
 rule as every other piece of real data here. The number they produce is.

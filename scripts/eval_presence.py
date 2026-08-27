@@ -48,6 +48,8 @@ from lanes import (  # noqa: E402
     HEADLIGHT_LEVELS,
     TEXTURES,
     VEHICLE_SIZE,
+    H,
+    W,
     lane,
     matrix,
     rain,
@@ -66,6 +68,18 @@ RAIN_COVERAGES = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.45)
 #: The object the metal-plate case is made of: roughly plate-sized against a
 #: lane-filling camera, about 1% of the frame. The scene the gate exists for.
 PLATE_SIZE = (80, 40)
+
+#: How much of the frame the matrix's vehicle covers. Published beside the cells
+#: where that vehicle was not measured, because "an ordinary car" and "a car
+#: close enough to fill the frame" land on the same reason and only the number
+#: tells them apart.
+VEHICLE_FRAME_FRACTION = (VEHICLE_SIZE[0] * VEHICLE_SIZE[1]) / (W * H)
+
+#: Real frames ever put through this gate. Published so that every NOT MEASURED
+#: caveat in the documents is DERIVED from it rather than written -- a sentence
+#: that says "no real footage" while a number beside it says otherwise is the
+#: failure this whole layer exists to make impossible.
+REAL_FRAMES_MEASURED = 0
 
 
 def _verdict(result) -> dict:
@@ -176,6 +190,9 @@ def separation(**detector_kwargs) -> dict:
                 "cells": 0,
                 "vehicle_seen": 0,
                 "vehicle_refused": 0,
+                "vehicle_not_measured": 0,
+                "vehicle_not_measured_health": {},
+                "vehicle_not_measured_cells": [],
                 "empty_called_empty": 0,
                 "empty_false_positive": 0,
                 "worst_vehicle_occupancy": None,
@@ -188,6 +205,26 @@ def separation(**detector_kwargs) -> dict:
         row["vehicle_refused"] += v.present is False
         row["empty_called_empty"] += e.present is False
         row["empty_false_positive"] += e.present is True
+        # Y5. A cell where the vehicle was neither admitted nor refused used to
+        # be a hole in the arithmetic: `cells` and `vehicle_seen` disagreed and
+        # nothing said why. It is the interesting case -- a frame with a car in
+        # it that the gate answered nothing about, and named EQUIPMENT as the
+        # reason -- so the reason is recorded, not just the count.
+        if v.present is None:
+            health = v.camera_health or "no fault reported"
+            row["vehicle_not_measured"] += 1
+            row["vehicle_not_measured_health"][health] = (
+                row["vehicle_not_measured_health"].get(health, 0) + 1
+            )
+            row["vehicle_not_measured_cells"].append(
+                {
+                    "contrast": cell["contrast"],
+                    "surface": cell["surface"],
+                    "vehicle_frame_fraction": round(VEHICLE_FRAME_FRACTION, 4),
+                    "camera_health": health,
+                    "reason": v.reason,
+                }
+            )
         if v.occupancy is not None:
             prev = row["worst_vehicle_occupancy"]
             row["worst_vehicle_occupancy"] = v.occupancy if prev is None else min(prev, v.occupancy)
@@ -249,11 +286,23 @@ def weather(detector, coverages=RAIN_COVERAGES) -> dict:
     declined = [r["coverage"] for r in sweep if r["empty_lane"]["present"] is None]
     admitted = [r["coverage"] for r in sweep if r["metal_plate"]["present"] is True]
     refusals = sum(1 for r in sweep if r["vehicle"]["present"] is False)
+    occupied_confidences = [
+        r["empty_lane"]["confidence"]
+        for r in sweep
+        if r["empty_lane"]["present"] is True and r["empty_lane"]["confidence"] is not None
+    ]
     return {
         "sweep": sweep,
         "highest_coverage_still_answered_false": max(answered_false) if answered_false else None,
         "coverages_reading_occupied_with_an_empty_lane": read_occupied,
         "lowest_coverage_reading_occupied": min(read_occupied) if read_occupied else None,
+        # The confidence the gate puts behind an empty lane it has called
+        # occupied. Published as its own figure rather than recomputed from the
+        # table by whatever prints it: a sentence derived from a summary nobody
+        # can perturb is a sentence nobody can check.
+        "highest_confidence_reading_occupied": (
+            max(occupied_confidences) if occupied_confidences else None
+        ),
         "lowest_coverage_declining_to_answer": min(declined) if declined else None,
         "metal_plate_admitted_from": min(admitted) if admitted else None,
         "vehicle_cells": len(sweep),
@@ -292,6 +341,14 @@ def headlights(detector, amounts=HEADLIGHT_LEVELS) -> dict:
     return {
         "sweep": sweep,
         "model": "multiplicative pool on a matte floor; no specular glare, no beam cut-off",
+        # X5. `pool` is what the beam ADDS, so a table reading "x3" sits beside a
+        # published 2.0 and the two look like a contradiction to anybody who
+        # opens this file. The convention is published rather than left in the
+        # renderer, so the document states it from here.
+        "pool_units": (
+            "`pool` is the beam's peak as a multiple of ambient ADDED to it, so the "
+            "table states peak = 1 + pool."
+        ),
         "highest_pool_still_empty": max(held) if held else None,
         "lowest_pool_reading_occupied": min(tripped) if tripped else None,
         "vehicle_cells": len(sweep),
@@ -328,11 +385,15 @@ def texture_floor(scenes=None) -> dict:
         ),
         "smooth_floor_reference_texture": round(detector._reference_texture, 3),
         "smooth_floor": _verdict(measured),
+        # X1c. The documents said the gate "declines to answer and says why"
+        # while nothing recorded the why, so half that sentence had no
+        # measurement behind it in either direction. This is the why.
+        "smooth_floor_reason": measured.reason,
         "reached": measured.present is None and "texture" in measured.reason,
     }
 
 
-def conflated_reasons(detector) -> dict:
+def conflated_reasons() -> dict:
     """K3/Q1: what `reference_not_recognised` actually means, measured.
 
     The label is documented as an equipment fault -- "something wrong with the
@@ -346,19 +407,56 @@ def conflated_reasons(detector) -> dict:
     false page for a MISSING one, on the knocked camera the contract advertises.
     So the release DISCLOSES the conflation instead of guessing, and this
     measures the disclosure so the document cannot drift from it.
+
+    X4. The fourth cause is the one that makes this a product finding rather
+    than a documentation one, and it came out of the matrix that was already
+    being measured: an ORDINARY vehicle -- 43.75% of the frame, not one filling
+    it -- on the low-texture ground a covered entry is likely to have, under a
+    beam pool, lands on the same reason. An arriving car is counted under
+    `camera_faults`. It is measured here as the matrix builds it, reference and
+    all, so that the scene in the document is the scene in the sweep.
     """
     from vehicle_id.plates.generator import PlateGenerator
 
+    plain = lane(90, seed=1)
+    arrival = next(
+        cell
+        for cell in matrix()
+        if cell["texture"] == 0.25
+        and cell["headlight"] == 2.0
+        and cell["contrast"] == 2.05
+        and cell["surface"] == 0.0
+    )
+    # (reference the gate was configured with, capture put through it)
+    # The name carries its own summary before the colon. The caveat below names
+    # the conditions the label is RIGHT about and there is no room there for the
+    # whole elaboration, so the head of the name is what it quotes -- a rule,
+    # rather than a second wording of the same thing kept in step by hand.
+    knocked = (
+        "a capture that is not a view of this lane: a camera knocked out of "
+        "alignment, or a scene rebuilt overnight"
+    )
     causes = {
-        "a vehicle close enough to fill the frame": vehicle(636, 356, seed=13),
-        "heavy weather": rain(0.45, seed=7),
-        "a capture that is not a view of this lane": PlateGenerator(seed=11)
-        .sample(degradation=0)
-        .image,
+        "a vehicle close enough to fill the frame": (plain, vehicle(636, 356, seed=13)),
+        "heavy weather": (plain, rain(0.45, seed=7)),
+        knocked: (plain, PlateGenerator(seed=11).sample(degradation=0).image),
+        "an ordinary vehicle arriving on low-texture ground under a beam pool": (
+            lane(90, seed=1, texture=arrival["texture"]),
+            arrival["vehicle"],
+        ),
     }
-    seen = {name: detector.measure([scene]).camera_health for name, scene in causes.items()}
+    seen = {
+        name: PresenceDetector(reference=reference).measure([scene]).camera_health
+        for name, (reference, scene) in causes.items()
+    }
     return {
         "causes": seen,
+        # Which of them the label is actually RIGHT about. Published rather than
+        # decided by whatever renders the document: the disclosure's whole point
+        # is that the reason is correct for one of these and wrong for the rest,
+        # and a renderer choosing which on its own would be a hand-written claim
+        # in the one section that exists to have none.
+        "causes_that_are_equipment_faults": [knocked],
         "all_report_the_same_reason": len(set(seen.values())) == 1,
         "reason_reported": sorted(set(v for v in seen.values() if v)),
     }
@@ -492,9 +590,13 @@ def controls(detector) -> dict:
     # differently, and that is the distinction the conflation flag is about.
     from lanes import flat as _flat_scene
 
+    # X5. The label was wrong: this scene is the frame-filling vehicle, which
+    # the measured section names "a vehicle close enough to fill the frame". A
+    # control that mislabels its own input is a small version of the disease
+    # this block exists for.
     distinct = {
         "a dead camera": detector.measure([_flat_scene(0)]).camera_health,
-        "a capture that is not a view of this lane": detector.measure(
+        "a vehicle close enough to fill the frame": detector.measure(
             [vehicle(636, 356, seed=13)]
         ).camera_health,
     }
@@ -508,13 +610,91 @@ def controls(detector) -> dict:
     # The one that was true for two rounds without anybody noticing: the matrix
     # axis cannot reach the texture floor, and it is published beside the scene
     # that can.
-    floor = texture_floor()
+    #
+    # X5. This used to publish `matrix_axis_can_reach_the_floor` -- a DIFFERENT
+    # predicate that happens to be false -- rather than re-running `reached` on
+    # the matrix ground. A control has to be the same measurement under a
+    # different input, or it proves something about a quantity nobody published.
+    smoothest = lane(90, seed=1, texture=min(TEXTURES))
+    on_matrix_ground = PresenceDetector(reference=smoothest).measure([smoothest])
     out["texture_floor.reached"] = {
-        "how": "the matrix's own ground at every value of the texture axis; sensor "
-               "grain alone keeps it above the floor, so the axis cannot reach it",
-        "value": floor["matrix_axis_can_reach_the_floor"],
+        "how": "the same predicate on the matrix's own ground at its smoothest "
+               "setting; sensor grain alone keeps it above the floor, so the "
+               "untextured branch is never taken",
+        "value": on_matrix_ground.present is None and "texture" in on_matrix_ground.reason,
+        "reason_seen": on_matrix_ground.reason,
     }
     return out
+
+
+#: What the gate is MEASURED not to be able to do, produced from the measurement
+#: rather than listed by hand.
+#:
+#: Y4. `tests/test_measured_docs.py` requires every entry's `seam_word` to appear
+#: in `presence.KNOWN_LIMITS`, so a limitation cannot be measured without the
+#: operator switching the gate on being told about it. The check used to iterate
+#: a hard-coded 5-tuple inside the test and its docstring promised that adding a
+#: measured limitation would turn it red; it could not. Deriving the list from
+#: the top-level SECTIONS of this file instead would demand a seam string for
+#: `gate` and `exposure`, which are not limitations, and the implementer would
+#: add an exclusion set -- the same hard-coded tuple with extra steps. So the
+#: measurement says which of its results are limitations, here, beside the code
+#: that measured them.
+def limitations(sep: dict, weather_result: dict, headlight_result: dict,
+                floor: dict, conflation: dict) -> list[dict]:
+    """Every measured thing this gate cannot do, and the words the seam must say.
+
+    `seam_word` is a PHRASE, not a keyword, and deliberately one that only the
+    disclosure covering this limitation contains. A bare word matches the whole
+    concatenated disclosure, so "headlight" was satisfied by the camera-fault
+    caveat mentioning a headlight pool and the headlight limitation could have
+    been deleted with nothing going red -- a check measuring the presence of a
+    word rather than the presence of a disclosure.
+    """
+    found = []
+    if any(not row["separates"] for row in sep.values()):
+        found.append({
+            "measured_in": "separation",
+            "topic": "ground smooth enough that vehicle and empty lane do not separate",
+            "seam_word": "smooth ground",
+        })
+    if weather_result["lowest_coverage_reading_occupied"] is not None:
+        found.append({
+            "measured_in": "weather",
+            "topic": "an empty lane reads as occupied in an open-air entry in rain",
+            "seam_word": "moderate rain",
+        })
+    if weather_result["metal_plate_admitted_from"] is not None:
+        found.append({
+            "measured_in": "weather",
+            "topic": "the metal plate on the loop transacts in that band",
+            "seam_word": "metal plate",
+        })
+    if headlight_result["lowest_pool_reading_occupied"] is not None:
+        found.append({
+            "measured_in": "headlight",
+            "topic": "a beam pool reads as occupied before the car that cast it arrives",
+            "seam_word": "headlight pool on the floor",
+        })
+    if floor["reached"]:
+        found.append({
+            "measured_in": "texture_floor",
+            "topic": "ground under the texture floor is declined rather than answered",
+            "seam_word": "it fails to null",
+        })
+    if conflation["all_report_the_same_reason"]:
+        found.append({
+            "measured_in": "conflated_reasons",
+            "topic": "one reason covers several unrelated conditions",
+            "seam_word": "reference_not_recognised",
+        })
+    if any(row["vehicle_not_measured"] for row in sep.values()):
+        found.append({
+            "measured_in": "separation",
+            "topic": "an ordinary arrival is reported as a camera fault",
+            "seam_word": "camera_faults",
+        })
+    return found
 
 
 def main() -> int:
@@ -583,9 +763,15 @@ def main() -> int:
           f"{floor_result['smooth_floor_reference_texture']} and is NOT MEASURED")
 
     print("measuring which conditions share the reference_not_recognised reason ...")
-    conflation = conflated_reasons(detector)
+    conflation = conflated_reasons()
     shared = "ONE shared reason" if conflation["all_report_the_same_reason"] else "distinct"
     print(f"  {len(conflation['causes'])} unrelated conditions, {shared}")
+
+    limits = limitations(
+        matrix_result, weather_result, headlight_result, floor_result, conflation
+    )
+    print(f"  {len(limits)} measured limitations, each of which the seam must name: "
+          + ", ".join(sorted(limit["seam_word"] for limit in limits)))
 
     print("measuring the control that makes each published boolean false ...")
     control_result = controls(detector)
@@ -623,6 +809,11 @@ def main() -> int:
         "headlight": headlight_result,
         "texture_floor": floor_result,
         "conflated_reasons": conflation,
+        "limitations": limits,
+        # Every NOT MEASURED caveat in the documents is derived from this, so
+        # that "no real footage has been through this gate" is a value rather
+        # than a sentence somebody remembered to keep true.
+        "scenes": {"real_frames_measured": REAL_FRAMES_MEASURED},
         "noise": noise,
         "gate": {
             "min_occupancy": detector.min_occupancy,
