@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .contract import ANSWER, FALLBACK, Capture, Engine, Identity, Read, new_read_id, utc_now
 from .plates.recognizer import DEFAULT_WEIGHTS, PlateRecognizer
+from .presence import Presence, PresenceDetector
 
 log = logging.getLogger(__name__)
 
@@ -55,8 +56,13 @@ class PlateEngine:
         device: str = "cpu",
         threshold: float | None = None,
         version: str = "",
+        presence: PresenceDetector | None = None,
     ) -> None:
         self._recognizer = PlateRecognizer(weights, device=device)
+        #: Optional, and when it is absent presence is reported as NOT MEASURED
+        #: rather than assumed either way. A lane with no reference view of the
+        #: empty tarmac behaves exactly as it did before this stage existed.
+        self._presence = presence
         digest = weights_id(weights)
         self.threshold = _resolve_threshold(weights, digest, threshold)
         measured = load_operating_point(weights) or {}
@@ -94,7 +100,24 @@ class PlateEngine:
         outcome, and "the engine threw" is not one a lane can act on.
         """
         if not captures:
-            return self._record([], "", 0.0, None, disagreed=False)
+            return self._record([], "", 0.0, None, disagreed=False, presence=_no_presence())
+
+        decoded = [(capture, _decode(capture)) for capture in captures]
+        images = [image for _, image in decoded if image is not None]
+
+        # Asked FIRST, and answered separately. If nothing was there, nothing is
+        # read: not because reading would fail, but because a plate read out of
+        # an empty lane is the silent wrong answer this whole stage exists to
+        # prevent. The recogniser has no rejection stage of its own -- it reads
+        # text out of sensor noise -- so "nothing is there" has to be decided
+        # before it, by something that is looking at the scene rather than at a
+        # crop of it.
+        presence = (
+            self._presence.measure(images) if self._presence is not None else _no_presence()
+        )
+        if presence.present is False:
+            log.info("no vehicle present (%s); not reading", presence.reason)
+            return self._record(captures, "", 0.0, None, disagreed=False, presence=presence)
 
         # Every capture is read, and every result is kept. Taking only the
         # argmax and discarding the rest is what made a batch holding two
@@ -102,8 +125,7 @@ class PlateEngine:
         # record -- the engine held the disconfirming evidence and threw it
         # away.
         results: list[tuple[str, float, Capture]] = []
-        for capture in captures:
-            image = _decode(capture)
+        for capture, image in decoded:
             if image is None:
                 continue
             text, confidence = self._recognizer.read(image)
@@ -111,7 +133,7 @@ class PlateEngine:
                 results.append((normalise(text), confidence, capture))
 
         if not results:
-            return self._record(captures, "", 0.0, None, disagreed=False)
+            return self._record(captures, "", 0.0, None, disagreed=False, presence=presence)
 
         best_text, best_confidence, best_capture = max(results, key=lambda r: r[1])
 
@@ -144,7 +166,9 @@ class PlateEngine:
                 )
                 break
 
-        return self._record(captures, best_text, best_confidence, best_capture, disagreed)
+        return self._record(
+            captures, best_text, best_confidence, best_capture, disagreed, presence
+        )
 
     def _record(
         self,
@@ -153,6 +177,7 @@ class PlateEngine:
         confidence: float,
         source: Capture | None,
         disagreed: bool,
+        presence: Presence,
     ) -> Read:
         identity = Identity(
             plate=text or None,
@@ -163,7 +188,15 @@ class PlateEngine:
             color=None,
             marks=(),
         )
-        answered = bool(text) and confidence >= self.threshold and not disagreed
+        # `presence is False` cannot answer, and cannot carry an identity --
+        # the contract refuses such a record outright, so this is belt and
+        # braces rather than the enforcement.
+        answered = (
+            bool(text)
+            and confidence >= self.threshold
+            and not disagreed
+            and presence.present is not False
+        )
         return Read(
             read_id=new_read_id(),
             # The contract says captured_at is when the FIRST capture was taken.
@@ -180,7 +213,13 @@ class PlateEngine:
             threshold_applied=self.threshold,
             outcome=ANSWER if answered else FALLBACK,
             captures_seen=len(captures),
+            presence=presence.present,
+            presence_confidence=presence.confidence,
         )
+
+
+def _no_presence() -> Presence:
+    return Presence.unmeasured("no presence detector is configured")
 
 
 def _distance(a: str, b: str) -> int:

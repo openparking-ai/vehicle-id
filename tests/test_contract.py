@@ -143,3 +143,60 @@ def test_a_missing_required_field_is_still_an_error():
     del payload["confidence"]
     with pytest.raises(KeyError):
         Read.from_dict(payload)
+
+
+# --- presence, and the invariant it exists for ----------------------------
+
+def test_presence_false_cannot_carry_an_identity():
+    """D2. If nothing was there, there is nothing to have identified.
+
+    A record claiming no vehicle while naming a plate does not describe a bad
+    read -- it contradicts itself, and something downstream would believe one
+    half of it.
+    """
+    with pytest.raises(ValueError, match="Nothing was there to identify"):
+        a_read(presence=False, identity=Identity(plate="ABC123"), outcome=FALLBACK,
+               confidence=0.0)
+
+
+def test_presence_false_cannot_be_an_answer():
+    with pytest.raises(ValueError, match="nothing to stand behind"):
+        a_read(presence=False, identity=Identity(), outcome=ANSWER, confidence=0.999)
+
+
+def test_presence_false_with_an_empty_identity_is_a_perfectly_good_record():
+    """The control. A rule that refused every presence=false record would be
+    safe and useless -- that record is the whole output of the gate."""
+    read = a_read(presence=False, identity=Identity(), outcome=FALLBACK, confidence=0.0)
+    assert read.presence is False
+    assert Read.from_dict(read.to_dict()) == read
+
+
+def test_presence_not_measured_is_not_presence_false():
+    """The distinction the third state exists for. A lane with no reference view
+    must behave as it did before this field existed, not refuse everybody."""
+    read = a_read(presence=None, identity=Identity(plate="ABC123"))
+    assert read.presence is None
+    assert read.vehicle_present is None
+    assert read.is_answer
+
+
+def test_presence_must_be_a_boolean_or_null():
+    with pytest.raises(ValueError, match="presence must be"):
+        a_read(presence="yes")
+
+
+def test_presence_survives_the_json_round_trip():
+    read = a_read(presence=True, presence_confidence=0.8)
+    restored = Read.from_dict(json.loads(json.dumps(read.to_dict())))
+    assert restored.presence is True
+    assert restored.presence_confidence == 0.8
+
+
+def test_a_record_from_before_presence_existed_still_parses():
+    """Presence is additive, so it does not bump `schema_version` -- which
+    means records written without it must keep working."""
+    payload = a_read().to_dict()
+    del payload["presence"]
+    del payload["presence_confidence"]
+    assert Read.from_dict(payload).presence is None

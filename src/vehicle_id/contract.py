@@ -170,6 +170,13 @@ class Read:
     engine: Engine
     threshold_applied: float
     outcome: str
+    #: Whether a VEHICLE was there, measured separately from whether it could
+    #: be identified and NEVER collapsed into one number. `None` means it was
+    #: not measured -- the same rule every other field obeys. A consumer that
+    #: reads `presence is False` as "no transaction" and `presence is None` as
+    #: "behave as you did before this field existed" is reading it correctly.
+    presence: bool | None = None
+    presence_confidence: float | None = None
     #: How many captures the engine was handed for this read. Additive, and
     #: present so that "one confident record" and "the batch disagreed with
     #: itself" are distinguishable after the fact rather than only in a log.
@@ -188,6 +195,24 @@ class Read:
         _text(self.camera_id, "camera_id")
         confidence = _unit_interval(self.confidence, "confidence")
         threshold = _unit_interval(self.threshold_applied, "threshold_applied")
+        if self.presence is not None and not isinstance(self.presence, bool):
+            raise ValueError(f"presence must be true, false or null, got {self.presence!r}")
+        if self.presence_confidence is not None:
+            _unit_interval(self.presence_confidence, "presence_confidence")
+
+        # The invariant D2 exists for, and the reason presence is a separate
+        # field rather than another way of saying "fallback": if nothing was
+        # there, there is nothing to have identified. A record carrying a plate
+        # while claiming no vehicle was present is not a bad read, it is a
+        # record that contradicts itself, and something downstream would
+        # believe one half of it.
+        if self.presence is False and self.identity != Identity():
+            raise ValueError(
+                "presence is false but the identity is not empty: "
+                f"{self.identity!r}. Nothing was there to identify."
+            )
+        if self.presence is False and self.outcome == ANSWER:
+            raise ValueError("presence is false; there is nothing to stand behind")
 
         # The one relationship this record exists to express, and the one thing
         # that used to be unchecked: a record cannot claim the engine stood
@@ -237,8 +262,20 @@ class Read:
             threshold_applied=d["threshold_applied"],
             outcome=d["outcome"],
             captures_seen=d.get("captures_seen", 1),
+            presence=d.get("presence"),
+            presence_confidence=d.get("presence_confidence"),
             schema_version=d["schema_version"],
         )
+
+    @property
+    def vehicle_present(self) -> bool | None:
+        """Provided so a consumer never writes `if read.presence:` by hand.
+
+        That spelling reads `None` -- not measured -- as `False`, which would
+        turn every lane without a reference view into a lane that refuses
+        everybody.
+        """
+        return self.presence
 
     def redacted(self) -> Read:
         """The same record with the identity blanked, for logs and metrics.

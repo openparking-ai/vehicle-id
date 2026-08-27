@@ -32,6 +32,13 @@ Three rules follow from it, and each is enforced by a test rather than a promise
   *those exact weights*. `threshold_applied` is in every record. The engine
   **refuses to start** on weights whose operating point nobody has measured,
   rather than stamping a constant onto records a different model produced.
+- **"Is a vehicle there" is asked first, and answered separately.** Presence is
+  its own field with its own confidence and is never folded into the identity
+  confidence. It has **three** states: `true`, `false`, and `null` for NOT
+  MEASURED — a lane with no reference view of its empty tarmac behaves exactly
+  as it did before this stage existed rather than refusing everybody. A record
+  with `presence: false` **cannot** carry an identity; the contract refuses to
+  build one.
 - **A batch that disagrees with itself is a fallback.** Several captures are of
   one vehicle; if more than one reads a plate confidently and they disagree,
   the engine does not pick the higher score. That is a tailgater or a second
@@ -150,11 +157,11 @@ ladder:
 > So **confidence alone cannot tell a plate from snow.** A dead or noisy camera
 > feed produces a confident plate on roughly one single frame in forty.
 >
-> Reading several captures of one vehicle is what mitigates it, because noise
-> reads *differently* every frame and the batch then disagrees with itself:
-> **2.3% for one capture, 0.7% for three.** It does not reach zero. Rejecting an
-> image that contains no plate needs a detector, and that is the next slice —
-> named here rather than left to be discovered.
+> Reading several captures of one vehicle mitigates it, because noise reads
+> *differently* every frame and the batch then disagrees with itself: **2.3% for
+> one capture, 0.3% for three.** The **presence gate** closes the rest — with a
+> reference view of the empty lane in front of it, the same measurement is
+> **0.0% at one capture and 0.0% at three.**
 >
 > A consumer with its own second gate is not exposed to the residual: measured
 > against a lane holding a 200-plate permit list, 2 confident noise reads out of
@@ -169,6 +176,45 @@ threshold whose silent-wrong rate falls below 1% (0.87% wrong-but-answered,
 30.9% sent to fallback). At a naive 0.85 the same model answers wrongly 4.45% of
 the time. That is the whole argument for shipping the threshold inside the
 record.
+
+## The presence gate
+
+```sh
+vehicle-id serve --empty-lane ./lane-empty.png
+```
+
+The question is **"is a VEHICLE present"**, not "is a plate present". Those are
+different questions and conflating them breaks the product in both directions: a
+car with a filthy, damaged or missing front plate is a legitimate entry and must
+be admitted, and a metal object held over an inductive loop is not a car and must
+receive nothing at all — no ticket, no session, no barrier.
+
+**No model, no weights, no dataset**, and that is a licensing decision before a
+technical one. Every general-purpose detector worth using is COCO-trained, and
+COCO's images are not the consortium's to license: the annotations are CC BY 4.0
+but the images are Flickr's, individually, with users accepting full
+responsibility. torchvision says the same of its own weights — they "may have
+their own licenses … derived from the dataset used for training", and working out
+whether you may use them is your problem. That is the trap that disqualified
+Ultralytics and OpenALPR before a line was written. And the escape the recogniser
+used — generate the training data — is not available: a plate is a rendered
+rectangle with a parameterisable font, which is why that generator works. A car
+is not.
+
+So it is answered the way a fixed camera on fixed tarmac makes possible: how much
+of the scene changed, in one contiguous region. A vehicle fills a large part of
+the frame. A person holding a plate does not, and neither does rain, a bird or a
+shadow — scattered change across 45% of the frame reads as **absent**, because
+only the largest connected region counts.
+
+> **What is measured and what is not.** This gate can be shown to reject sensor
+> noise, to reject a plate-sized object, to reject scattered speckle, and to
+> admit a plate the recogniser reads perfectly — all of which are in the test
+> suite. Its behaviour on **real vehicles at a real lane is NOT MEASURED**, and
+> will stay that way until the physical bench exists. The occupancy threshold is
+> an **assumption**, not a measurement: it cannot be measured without lane
+> footage, so it is a documented, configurable number rather than a constant
+> presented as a finding.
 
 ## What it does not do yet
 

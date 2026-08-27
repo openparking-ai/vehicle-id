@@ -144,6 +144,7 @@ class VehicleIdService:
                 "weights_id": engine.weights_id,
             },
             "threshold_applied": self.engine.threshold,
+            "presence_gate": getattr(self.engine, "_presence", None) is not None,
             "cursor": self.store.cursor,
             "time": utc_now(),
         }

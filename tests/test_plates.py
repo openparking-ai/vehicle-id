@@ -399,3 +399,74 @@ def test_a_noisy_feed_is_mostly_but_not_entirely_refused(clean_confidence):
         f"{rate:.1%} of noisy-feed reads answered confidently; the batch "
         "disagreement rule has stopped working"
     )
+
+
+@needs_weights
+def test_the_presence_gate_moves_the_noise_measurement(clean_confidence):
+    """D6. A detector that does not move the number is not evidence of anything.
+
+    Measured on the reference weights: a dead feed answers confidently on 2.3%
+    of single-capture reads and 0.3% of three-capture reads with no gate, and
+    0.0% of both with the gate in front. This test asserts the gate is doing
+    that work, and it fails if the gate is bypassed or stops rejecting.
+    """
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    import cv2 as _cv2
+    import numpy as np
+
+    from vehicle_id.presence import PresenceDetector
+
+    rng = np.random.default_rng(0)
+
+    def noise_capture():
+        image = rng.integers(0, 255, (160, 320, 3), dtype=np.uint8)
+        ok, buf = _cv2.imencode(".png", image)
+        assert ok
+        return Capture.now(buf.tobytes(), camera_id="dead-feed")
+
+    reference = np.full((160, 320, 3), 90, np.uint8)
+    gated = PlateEngine(WEIGHTS, presence=PresenceDetector(reference=reference))
+
+    answered = 0
+    for _ in range(150):
+        if gated.read([noise_capture() for _ in range(3)]).is_answer:
+            answered += 1
+    assert answered == 0, f"{answered}/150 noisy-feed reads got past the presence gate"
+
+
+@needs_weights
+def test_the_gate_does_not_refuse_a_readable_plate(clean_confidence):
+    """The control that matters more. A gate that rejects everything would post
+    a perfect noise score and break the product."""
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    import numpy as np
+
+    from vehicle_id.presence import PresenceDetector
+
+    # An empty-lane reference the plate crop differs from substantially, which
+    # is what a camera looking at tarmac sees when a car arrives.
+    reference = np.full((160, 320, 3), 20, np.uint8)
+    gated = PlateEngine(WEIGHTS, presence=PresenceDetector(reference=reference))
+
+    sample = PlateGenerator(seed=11).sample(degradation=0)
+    read = gated.read([as_capture(sample.image)])
+    assert read.presence is True
+    assert read.is_answer, "the gate refused a plate the engine reads perfectly well"
+
+
+@needs_weights
+def test_with_no_detector_presence_is_not_measured_and_nothing_changes(clean_confidence):
+    """A lane that has not configured a reference view must behave exactly as it
+    did before this stage existed."""
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    engine = PlateEngine(WEIGHTS)
+    sample = PlateGenerator(seed=11).sample(degradation=0)
+    read = engine.read([as_capture(sample.image)])
+    assert read.presence is None
+    assert read.is_answer
