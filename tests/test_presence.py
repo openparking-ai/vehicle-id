@@ -22,7 +22,16 @@ import pytest
 pytest.importorskip("cv2")
 
 
-from lanes import dead_sensor, flat, lane, rain, sensor_noise, vehicle  # noqa: E402
+from lanes import (  # noqa: E402
+    CONTRASTS,
+    dead_sensor,
+    flat,
+    lane,
+    matrix,
+    rain,
+    sensor_noise,
+    vehicle,
+)
 from vehicle_id.presence import (  # noqa: E402
     NO_SIGNAL,
     REFERENCE_NOT_RECOGNISED,
@@ -222,21 +231,57 @@ def test_a_frame_filling_object_never_reads_as_absent(detector):
 # --- what the gate must not do -------------------------------------------
 
 @guarantee
-def test_scattered_change_is_not_a_vehicle(detector):
-    """Rain or snow: a large fraction of the frame changes, but not contiguously.
-    Only the largest connected region counts, which is what separates a car from
-    weather.
+def test_light_scattered_change_is_not_a_vehicle(detector):
+    """Light rain: scattered change, and the lane is still recognisably empty.
 
-    Still `False`, not `None`. Rain fragments the picture but leaves most of the
-    lane matching the reference and the frame is still a picture, so the lane IS
-    visible and it IS empty. That is a measurement, and it is the one that keeps
-    a lane working in bad weather instead of falling back all afternoon.
+    Only the largest connected region counts, which is what separates a car from
+    weather. At this coverage the answer is a measurement -- `False`, the lane
+    is visible and there is nothing on it.
     """
-    result = detector.measure([rain(0.45)])
+    result = detector.measure([rain(0.05)])
     assert result.present is False, (
-        f"rain across ~45% of the frame read as {result.present} "
-        f"({result.occupancy})"
+        f"light rain read as {result.present} ({result.occupancy})"
     )
+
+
+@guarantee
+def test_heavy_weather_stops_the_gate_answering_rather_than_answering_wrongly(detector):
+    """MEASURED REGRESSION, recorded rather than hidden. Read this one.
+
+    Under the intensity measure this gate reported `False` for rain across 45%
+    of the frame: scattered pixels were removed by a morphological open, the
+    lane still matched, and the verdict was "visible and empty".
+
+    The structural measure does not survive that. A window is 11px across and
+    rain streaks land everywhere, so almost every window decorrelates and the
+    fraction of the reference still recognisable falls under
+    `min_reference_match`. The gate stops answering.
+
+    That is a real loss of capability and it is stated in the README and the
+    contract. What it is NOT is a wrong refusal: heavy weather resolves to
+    `None`, which puts the lane back to a ticket and a human. The measured
+    boundary is in `docs/measured/presence.json` under `rain`, and the
+    behaviour in between -- a spurious `True`, which costs a ticket nobody
+    needed -- is measured there too rather than left to be discovered.
+
+    The one thing that must hold at every coverage is that an empty lane in
+    weather never reads `False` while a vehicle in the same weather does not.
+    Both are asserted below.
+    """
+    heavy = detector.measure([rain(0.45)])
+    assert heavy.present is None, (
+        f"heavy rain read as {heavy.present}; the measured behaviour is None"
+    )
+    assert heavy.camera_health == REFERENCE_NOT_RECOGNISED
+
+    # The property that actually matters, across the whole sweep: weather may
+    # cost the gate its answer, but it may never produce the value that ends a
+    # transaction. `False` here would refuse a customer because it was raining.
+    for coverage in (0.10, 0.20, 0.30, 0.45):
+        result = detector.measure([rain(coverage, seed=7)])
+        assert result.present is not False, (
+            f"rain at {coverage:.0%} coverage produced a refusal ({result.reason})"
+        )
 
 
 @guarantee
@@ -327,3 +372,133 @@ def test_confidence_degrades_rather_than_jumping_through_the_transition():
     seen.sort()
     steps = [abs(seen[i][1] - seen[i - 1][1]) for i in range(1, len(seen))]
     assert max(steps) < 0.25, f"confidence jumped by {max(steps):.3f} between adjacent samples"
+
+
+# --- G1/G2: the axis the old measure was blind to, swept ------------------
+
+@guarantee
+@pytest.mark.parametrize("contrast", CONTRASTS)
+def test_a_vehicle_is_seen_at_every_contrast_including_none_at_all(contrast):
+    """The blind band, closed and kept closed.
+
+    The intensity measure decided "changed" on grey-level distance, so an object
+    at the tarmac's own luminance was invisible to it: at a reference level of
+    90 a vehicle occupying 43.75% of the frame -- nearly three times the
+    occupancy floor -- read `present=False` at 0.97 confidence for any body
+    shade between roughly 70 and 120. That is a grey car on grey asphalt, and at
+    the lane it means the barrier stays shut and the only record is a rejected
+    arming.
+
+    `contrast=1.0` is that car, exactly: the object reflects precisely as much
+    light as the ground it sits on. It must be seen anyway, because a vehicle
+    occludes the ground's structure whatever its paint does.
+
+    The old fixture could not express this case at all -- `shade` was hardcoded
+    at `level * 2.05` with no parameter -- which is why two rounds of review
+    passed over it.
+    """
+    detector = PresenceDetector(reference=lane(90, seed=1))
+    result = detector.measure([vehicle(420, 240, seed=77, contrast=contrast)])
+    assert result.present is True, (
+        f"a vehicle at contrast {contrast} (tarmac ratio) read as {result.present}; "
+        f"occupancy {result.occupancy}"
+    )
+
+
+@guarantee
+def test_the_contrast_sweep_is_not_passing_because_everything_reads_present():
+    """The control for the sweep above, and it is the one that matters.
+
+    A detector that answered `True` for every frame would pass every assertion
+    in the test above and be worthless. The same detector, on the same ground,
+    must still call an empty lane empty.
+    """
+    detector = PresenceDetector(reference=lane(90, seed=1))
+    for seed in (301, 302, 303):
+        result = detector.measure([lane(90, seed=seed)])
+        assert result.present is False, (
+            f"an empty lane read as {result.present}; the contrast sweep above "
+            "proves nothing if the gate admits everything"
+        )
+
+
+@guarantee
+def test_no_cell_of_the_matrix_refuses_a_vehicle():
+    """The safety invariant, stated over the whole matrix rather than per case.
+
+    `false` is the only value that ends a transaction. Whatever else the gate
+    does across contrast, ground texture and body grain -- and it does not
+    separate everywhere, see the low-texture cells below -- it must never emit
+    that value for a frame with a vehicle in it.
+    """
+    refused = []
+    for cell in matrix():
+        detector = PresenceDetector(reference=lane(90, seed=1, texture=cell["texture"]))
+        if detector.measure([cell["vehicle"]]).present is False:
+            refused.append(cell)
+    assert not refused, (
+        f"{len(refused)} matrix cells refused a vehicle: "
+        + ", ".join(
+            f"contrast={c['contrast']} texture={c['texture']} surface={c['surface']}"
+            for c in refused[:6]
+        )
+    )
+
+
+@guarantee
+def test_the_matrix_covers_both_sides_of_every_axis():
+    """G2c. The coverage control: the matrix asserts its own adequacy.
+
+    A matrix that had quietly lost its low-contrast cells would let every test
+    above pass while measuring nothing. `OPENPARKING_SETTLED.md` section 6 says
+    the fixture is part of the measurement; this applies that to coverage rather
+    than to realism.
+    """
+    cells = matrix()
+    contrasts = {c["contrast"] for c in cells}
+    textures = {c["texture"] for c in cells}
+    surfaces = {c["surface"] for c in cells}
+
+    assert any(c < 1.0 for c in contrasts), "no vehicle darker than the tarmac"
+    assert any(c > 1.0 for c in contrasts), "no vehicle paler than the tarmac"
+    assert 1.0 in contrasts, "the exactly-invisible case is not in the matrix"
+    assert any(0.9 <= c <= 1.1 for c in contrasts if c != 1.0), (
+        "nothing sampled just inside the band the old measure was blind to"
+    )
+    assert min(textures) < 0.5 and max(textures) > 1.5, (
+        "ground texture is not swept across a useful range"
+    )
+    assert 0.0 in surfaces and any(s > 0 for s in surfaces), (
+        "the object's own surface grain is not varied"
+    )
+    assert len(cells) == len(contrasts) * len(textures) * len(surfaces), (
+        "the matrix is not the full product of its axes"
+    )
+
+
+@guarantee
+def test_ground_with_no_texture_is_not_measured_rather_than_guessed():
+    """A real picture, in focus, of ground that carries nothing to recognise.
+
+    Smooth poured concrete under a clean sensor. The structural measure has
+    nothing to compare, and the contract's first rule applies: a value that was
+    not measured is null. Never `false` -- a measure that cannot see the ground
+    cannot report that the ground is empty.
+
+    Note `camera_health` stays unset. Nothing is broken; this lane is simply not
+    one this measure can serve, which is a different thing from a dead camera
+    and must not page anybody.
+    """
+    import cv2
+    import numpy as np
+
+    plain = np.full((360, 640), 120.0, np.float32)
+    plain += np.linspace(-6, 6, 360, dtype=np.float32)[:, None]
+    cv2.rectangle(plain, (0, 0), (640, 20), 100, -1)
+    plain += np.random.default_rng(3).normal(0, 0.6, (360, 640)).astype(np.float32)
+    smooth = cv2.merge([np.clip(plain, 0, 255).astype(np.uint8)] * 3)
+
+    result = PresenceDetector(reference=smooth).measure([smooth])
+    assert result.present is None
+    assert result.camera_health is None, "a plain reference is not an equipment fault"
+    assert "texture" in result.reason

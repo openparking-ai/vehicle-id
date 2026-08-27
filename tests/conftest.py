@@ -29,6 +29,17 @@ import pytest
 
 ALLOW_ENV = "VEHICLE_ID_ALLOW_SKIPPED"
 
+#: Modules that carry guarantees and may not silently stop being collected.
+#: A collection-time skip cannot tell us which tests inside were marked, so the
+#: module is named instead. Keep this in step with the `@guarantee` marks.
+GUARANTEE_MODULES = (
+    "test_presence.py",
+    "test_presence_wiring.py",
+    "test_contract.py",
+    "test_measured_docs.py",
+    "test_plates.py",
+)
+
 _skipped: list[tuple[str, str]] = []
 
 
@@ -37,17 +48,42 @@ def _allowances() -> list[str]:
     return [part.strip().lower() for part in raw.split(",") if part.strip()]
 
 
+def _reason(report) -> str:
+    if isinstance(report.longrepr, tuple) and len(report.longrepr) == 3:
+        return str(report.longrepr[2])
+    return str(report.longrepr)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
     if report.skipped and item.get_closest_marker("guarantee"):
-        reason = ""
-        if isinstance(report.longrepr, tuple) and len(report.longrepr) == 3:
-            reason = str(report.longrepr[2])
-        else:
-            reason = str(report.longrepr)
-        _skipped.append((item.nodeid, reason))
+        _skipped.append((item.nodeid, _reason(report)))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_collectreport(report):
+    """The half the first version could not see, and it was the half in use.
+
+    `pytest_runtest_makereport` fires for collected ITEMS. A module that calls
+    `pytest.importorskip` at import time never produces items -- it is skipped
+    during COLLECTION -- so every guarantee in it vanished without appearing
+    here, without a warning, and with the run exiting 0. Both presence modules
+    open with `importorskip`, so the mechanism this guard exists for was the one
+    it could not observe: torch absent with cv2 present drops eight wiring
+    guarantees and the build stays green. L3 verified that against this file.
+
+    A skipped module cannot be asked which of its tests were guarantees, because
+    it was never imported. So the rule is coarser and deliberately so: a module
+    listed in GUARANTEE_MODULES may not vanish. Naming them is the point -- a
+    module that carries a promise is a thing somebody decided, and it should
+    take a decision to stop running it.
+    """
+    outcome = yield
+    del outcome
+    if report.skipped and any(name in str(report.nodeid) for name in GUARANTEE_MODULES):
+        _skipped.append((str(report.nodeid), _reason(report)))
 
 
 def pytest_sessionfinish(session, exitstatus):

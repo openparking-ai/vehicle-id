@@ -96,7 +96,12 @@ the answers have opposite correct responses.**
 
 `false` is the narrow one on purpose. It is the only value that ends a
 transaction, so the engine says it only when it has the measurement to back it:
-the lane is visible, it matches the reference, and there is nothing on it. A
+the lane is visible, its ground is still recognisable as the ground the
+reference describes, and nothing is standing on it. Note the middle clause — it
+is what the measurement actually establishes, and it is weaker than "there is
+nothing there". A lane whose ground carries no texture to recognise, or whose
+view is broken up by heavy weather, cannot support that claim and returns `null`
+instead. A
 camera that failed, a view that no longer matches the reference, a vehicle close
 enough to fill the frame and a caller sending plate crops are all `null` — not
 because nothing is there, but because nobody can tell, and `null` is the value
@@ -283,7 +288,9 @@ Three things this release does NOT do, stated rather than left to be discovered:
   submitting several captures of one vehicle filters most of the rest — a noisy
   feed answers confidently on <!--m:noise.three_capture-->1.4% mean, 0.7-3.3% across 12 seeds x 150 reads<!--/m--> of
   three-capture reads, against <!--m:noise.one_capture-->1.9% mean, 0.0-4.0% across 12 seeds x 150 reads<!--/m--> of
-  single-capture ones. **It is not zero.**
+  single-capture ones. **It is not zero.** Measured on weights
+  <!--m:noise.weights-->sha256:0de21983b58b0ecd<!--/m-->; a rate without the artefact it
+  was measured on is not a figure.
 
   With a reference view configured, the presence gate stops the read before the
   recogniser sees a frame that carries no picture, and takes those to
@@ -296,13 +303,37 @@ Three things this release does NOT do, stated rather than left to be discovered:
   perfectly valid scene. **If a wrong answer is expensive for you, keep a second
   gate of your own regardless**: a permit list, a plausibility check, anything
   that is not this engine.
-- **The gate has not been measured on real vehicles.** It is shown to reject
-  sensor noise, a flat or blown frame, a plate-sized object and heavy rain; to
-  hold an empty lane at `false` across
-  <!--m:exposure.range-->light level 20 to 250 against a reference captured at 90<!--/m-->; and to admit a lane with a vehicle in
-  it. Real lanes, real cars, real weather: NOT MEASURED until the bench. The
-  occupancy floor, the ceiling and the pixel step are assumptions and are
-  configurable for that reason.
+- **Presence is UNVALIDATED against real vehicles, and it is opt-in.** No frame
+  of real footage has ever been through this gate; every number about it
+  describes drawn rectangles on a drawn lane. It is **off unless you configure a
+  reference view** — without one presence is `null` and nothing about your
+  integration changes. Switching it on is choosing an unvalidated measurement.
+
+  What it is shown to do: reject sensor noise, a flat or blown frame and a
+  plate-sized object; hold an empty lane at `false` across
+  <!--m:exposure.range-->light level 20 to 250 against a reference captured at 90<!--/m-->;
+  and admit a lane with a vehicle in it at every vehicle/ground contrast tested,
+  including a vehicle at the ground's exact luminance.
+
+  What it is shown NOT to do, measured on the same matrix:
+
+  * **Ground that carries no texture defeats it.** It separates vehicle from
+    empty at ground texture
+    <!--m:separation.textures_that_work-->1.0, 2.0<!--/m--> with a worst-case
+    occupancy margin of <!--m:separation.margin-->0.42<!--/m-->, and does not
+    separate at <!--m:separation.textures_that_fail-->0.25<!--/m-->, where an
+    empty lane reads as occupied. On smooth ground this gate gives you nothing.
+  * **Heavy weather stops it answering.** It answers `false` up to
+    <!--m:weather.answers_up_to-->5% of the frame in streaks<!--/m--> and returns
+    `null` above that.
+
+  What holds across everything measured: **no case produced `false` for a frame
+  with a vehicle in it** — <!--m:separation.refusals-->0<!--/m--> wrongful
+  refusals across <!--m:separation.cells-->54<!--/m--> matrix cells and the
+  weather sweep. Where it fails, it fails to `null`, which is a ticket and a
+  human. Real lanes, real cars, real weather: NOT MEASURED until the bench. The
+  occupancy floor, the ceiling and the structural threshold are assumptions and
+  are configurable for that reason.
 - **Presence needs a view of the LANE, not a crop of a plate.** A caller
   submitting tight plate crops has no empty-lane background in frame, so
   occupancy runs to the ceiling and presence is `null` — reads carry on exactly

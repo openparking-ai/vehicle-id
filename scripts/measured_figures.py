@@ -42,8 +42,31 @@ def figures(evidence: dict) -> dict[str, str]:
     gate = evidence["gate"]
     out["gate.min_occupancy"] = f"{gate['min_occupancy']:.0%}"
     out["gate.max_occupancy"] = f"{gate['max_occupancy']:.0%}"
-    out["gate.pixel_delta"] = str(gate["pixel_delta"])
+    out["gate.min_structural_change"] = str(gate["min_structural_change"])
+    out["gate.window"] = str(gate["window"])
     out["gate.min_frame_std"] = str(gate["min_frame_std"])
+
+    # G1/G2. What the matrix gave, stated as the measurement rather than as a
+    # claim. `separates` is per ground-texture row and the worst cell in the row
+    # decides it, so a row that says it separates has no failing cell in it.
+    sep = evidence["separation"]
+    working = sorted(t for t, row in sep.items() if row["separates"])
+    failing = sorted(t for t, row in sep.items() if not row["separates"])
+    margins = [row["margin"] for row in sep.values() if row["separates"]]
+    out["separation.textures_that_work"] = ", ".join(working) if working else "none"
+    out["separation.textures_that_fail"] = ", ".join(failing) if failing else "none"
+    out["separation.margin"] = f"{min(margins):.2f}" if margins else "no separation at all"
+    out["separation.cells"] = str(sum(row["cells"] for row in sep.values()))
+    out["separation.refusals"] = str(sum(row["vehicle_refused"] for row in sep.values()))
+
+    weather = evidence["weather"]
+    highest = weather["highest_coverage_still_answered_false"]
+    out["weather.answers_up_to"] = (
+        f"{highest:.0%} of the frame in streaks" if highest is not None else "no coverage at all"
+    )
+
+    noise_block = evidence.get("noise") or {}
+    out["noise.weights"] = noise_block.get("weights_id", "AN UNRECORDED ARTEFACT")
 
     exposure = evidence["exposure"]
     out["exposure.range"] = (

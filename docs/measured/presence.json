@@ -55,16 +55,131 @@
     "all_false_across_range": true
   },
   "confidence_transition": {
-    "samples": 40,
-    "largest_confidence_step": 0.0697,
-    "confidence_at_lowest_occupancy": 0.5746,
-    "lowest_occupancy_sampled": 0.0638,
-    "confidence_within_5pp_of_the_boundary_max": 0.2957,
-    "empty_lane_confidence": 1.0
+    "samples": 41,
+    "largest_confidence_step": 0.0779,
+    "confidence_at_lowest_occupancy": 0.4948,
+    "lowest_occupancy_sampled": 0.0758,
+    "confidence_within_5pp_of_the_boundary_max": 0.2773,
+    "empty_lane_confidence": 0.9901
+  },
+  "separation": {
+    "0.25": {
+      "cells": 18,
+      "vehicle_seen": 18,
+      "vehicle_refused": 0,
+      "empty_called_empty": 0,
+      "empty_false_positive": 18,
+      "worst_vehicle_occupancy": 0.6981,
+      "worst_empty_occupancy": 0.653,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.0451,
+      "separates": false
+    },
+    "1.0": {
+      "cells": 18,
+      "vehicle_seen": 18,
+      "vehicle_refused": 0,
+      "empty_called_empty": 18,
+      "empty_false_positive": 0,
+      "worst_vehicle_occupancy": 0.4283,
+      "worst_empty_occupancy": 0.003,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.4253,
+      "separates": true
+    },
+    "2.0": {
+      "cells": 18,
+      "vehicle_seen": 18,
+      "vehicle_refused": 0,
+      "empty_called_empty": 18,
+      "empty_false_positive": 0,
+      "worst_vehicle_occupancy": 0.4242,
+      "worst_empty_occupancy": 0.0,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.4242,
+      "separates": true
+    }
+  },
+  "weather": {
+    "sweep": [
+      {
+        "coverage": 0.05,
+        "present": false,
+        "occupancy": 0.0208
+      },
+      {
+        "coverage": 0.1,
+        "present": true,
+        "occupancy": 0.4277
+      },
+      {
+        "coverage": 0.15,
+        "present": true,
+        "occupancy": 0.6122
+      },
+      {
+        "coverage": 0.2,
+        "present": true,
+        "occupancy": 0.825
+      },
+      {
+        "coverage": 0.25,
+        "present": true,
+        "occupancy": 0.8903
+      },
+      {
+        "coverage": 0.3,
+        "present": null,
+        "occupancy": null
+      },
+      {
+        "coverage": 0.35,
+        "present": null,
+        "occupancy": null
+      },
+      {
+        "coverage": 0.45,
+        "present": null,
+        "occupancy": null
+      }
+    ],
+    "highest_coverage_still_answered_false": 0.05,
+    "never_refuses_in_weather": true
   },
   "noise": {
     "reads_per_seed": 150,
     "seeds": 12,
+    "weights_id": "sha256:0de21983b58b0ecd",
     "no_gate_1_capture": {
       "answered_counts": [
         4,
@@ -145,8 +260,11 @@
   "gate": {
     "min_occupancy": 0.15,
     "max_occupancy": 0.9,
-    "pixel_delta": 30,
+    "min_structural_change": 0.5,
+    "stabiliser": 0.5,
+    "window": 11,
     "min_frame_std": 4.0,
-    "min_reference_match": 0.1
+    "min_reference_match": 0.1,
+    "min_reference_texture": 1.5
   }
 }
