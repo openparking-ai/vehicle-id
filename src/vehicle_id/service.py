@@ -145,6 +145,10 @@ class VehicleIdService:
             },
             "threshold_applied": self.engine.threshold,
             "presence_gate": getattr(self.engine, "_presence", None) is not None,
+            # Named faults the gate has reported since start. A camera that
+            # died at 3am is a run of these; a lane that is merely quiet is an
+            # empty dict, and the two must not look the same from outside.
+            "camera_faults": dict(getattr(self.engine, "camera_faults", {}) or {}),
             "cursor": self.store.cursor,
             "time": utc_now(),
         }

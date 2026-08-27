@@ -94,6 +94,14 @@ the answers have opposite correct responses.**
   is falsy, and `if (!read.presence)` turns every deployment without a reference
   view into one that refuses every customer.
 
+`false` is the narrow one on purpose. It is the only value that ends a
+transaction, so the engine says it only when it has the measurement to back it:
+the lane is visible, it matches the reference, and there is nothing on it. A
+camera that failed, a view that no longer matches the reference, a vehicle close
+enough to fill the frame and a caller sending plate crops are all `null` — not
+because nothing is there, but because nobody can tell, and `null` is the value
+that means that.
+
 Two invariants the record enforces, so you never have to check them:
 
 - `presence: false` **cannot** carry an identity. Nothing was there to identify;
@@ -271,17 +279,36 @@ worse failure than losing the one read that was mid-write.
 Three things this release does NOT do, stated rather than left to be discovered:
 
 - **The recogniser has no rejection stage of its own.** It reads text out of
-  noise and out of a flat black frame. The presence gate is what closes that —
-  measured, a noisy feed goes from 2.3% confident answers to 0.0% with the gate
-  in front — but the gate needs a reference view of the empty lane, and without
-  one presence is `null` and the old behaviour applies. **Configure the
-  reference.** And if a wrong answer is expensive for you, keep a second gate of
-  your own regardless: a permit list, a plausibility check, anything that is not
-  this engine.
+  noise and out of a flat black frame. Confidence filters most of that away, and
+  submitting several captures of one vehicle filters most of the rest — a noisy
+  feed answers confidently on <!--m:noise.three_capture-->1.4% mean, 0.7-3.3% across 12 seeds x 150 reads<!--/m--> of
+  three-capture reads, against <!--m:noise.one_capture-->1.9% mean, 0.0-4.0% across 12 seeds x 150 reads<!--/m--> of
+  single-capture ones. **It is not zero.**
+
+  With a reference view configured, the presence gate stops the read before the
+  recogniser sees a frame that carries no picture, and takes those to
+  <!--m:noise.gated_three_capture-->0.0% (12 seeds x 150 reads, 1800 in total, none)<!--/m--> and
+  <!--m:noise.gated_one_capture-->0.0% (12 seeds x 150 reads, 1800 in total, none)<!--/m--> respectively. **Configure the
+  reference.** But read what that covers: it is measured against a *dead feed* —
+  sensor noise, a flat or blown frame — which is one of the two ways a camera
+  fails. A camera showing a real picture that is simply not a vehicle is not
+  closed by it, and neither is a plate hallucinated out of a badly framed but
+  perfectly valid scene. **If a wrong answer is expensive for you, keep a second
+  gate of your own regardless**: a permit list, a plausibility check, anything
+  that is not this engine.
 - **The gate has not been measured on real vehicles.** It is shown to reject
-  noise, a plate-sized object and scattered speckle, and to admit a readable
-  plate. Real lanes, real cars, real weather: NOT MEASURED until the bench. The
-  occupancy threshold is an assumption and is configurable for that reason.
+  sensor noise, a flat or blown frame, a plate-sized object and heavy rain; to
+  hold an empty lane at `false` across
+  <!--m:exposure.range-->light level 20 to 250 against a reference captured at 90<!--/m-->; and to admit a lane with a vehicle in
+  it. Real lanes, real cars, real weather: NOT MEASURED until the bench. The
+  occupancy floor, the ceiling and the pixel step are assumptions and are
+  configurable for that reason.
+- **Presence needs a view of the LANE, not a crop of a plate.** A caller
+  submitting tight plate crops has no empty-lane background in frame, so
+  occupancy runs to the ceiling and presence is `null` — reads carry on exactly
+  as they did before this field existed. That is deliberate: the alternative is
+  a `false` that would refuse every customer of every crop-submitting
+  deployment.
 
 - **The service is not authenticated.** Anything that can reach the port can
   submit captures and read records, and a consumer cannot tell this engine from

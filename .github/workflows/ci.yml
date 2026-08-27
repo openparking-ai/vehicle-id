@@ -64,6 +64,11 @@ jobs:
           PY
 
       - name: Tests
+        # The contract, the service and the push queue only. Everything that
+        # needs OpenCV or torch skips here, including the presence guarantees --
+        # named, because an unnamed skip of a guarantee test now fails the run.
+        env:
+          VEHICLE_ID_ALLOW_SKIPPED: "could not import"
         run: pytest -q
 
   engine:
@@ -97,7 +102,23 @@ jobs:
               cv2.imwrite(str(out / f"plate{i}.png"), sample.image)
           PY
 
+      - name: Is the presence gate CONNECTED? No weights needed, so no skips
+        # BEFORE the model is trained, deliberately. Whether the gate is wired
+        # into the engine is answerable with a stub recogniser at a fixed
+        # confidence, and keeping it answerable without weights is what stops it
+        # skipping -- three of these guarantees skipped in every run for a
+        # fortnight while this job stayed green.
+        #
+        # No VEHICLE_ID_ALLOW_SKIPPED here on purpose: nothing in these files is
+        # allowed to skip in this job, and the run fails if it does.
+        run: pytest tests/test_presence_wiring.py tests/test_presence.py -q
+
       - name: Engine tests, including never-wrong-silently
+        # The accuracy half, which genuinely needs weights better than the small
+        # model this job trains. The skips are DECLARED: an unnamed skip of a
+        # @guarantee test fails the run.
+        env:
+          VEHICLE_ID_ALLOW_SKIPPED: "needs weights"
         run: pytest tests/test_plates.py -q
 
       - name: The harness runs, reports, and records the operating point
@@ -118,6 +139,23 @@ jobs:
             echo "engine started on weights with no measured operating point"; exit 1
           fi
           echo "refused, as required"
+
+      - name: Every published figure is still the measured one
+        # The documentation fail-control. `eval_presence.py` re-measures what the
+        # gate does and the check compares it with what README.md and
+        # docs/CONTRACT.md say. A figure edited by hand turns this red.
+        #
+        # The noise rates need real weights, so this run measures the gate's
+        # geometry and keeps the recorded rates; the comparison still covers
+        # both, because the evidence file is committed.
+        run: |
+          python scripts/eval_presence.py --weights models/plate_crnn.pt
+          git diff --exit-code docs/measured/presence.json || {
+            echo "the gate's measured geometry has changed but docs/measured/presence.json was not updated"
+            echo "run: python scripts/eval_presence.py --update-docs"
+            exit 1
+          }
+          pytest tests/test_measured_docs.py -q
 
       - name: The CLI reads a folder with no system present
         # The definition of done, run as a check: someone with no parking
