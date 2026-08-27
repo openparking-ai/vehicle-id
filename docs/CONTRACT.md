@@ -37,7 +37,9 @@ by push, or by pull.
   },
   "threshold_applied": 0.99,
   "outcome": "answer",
-  "captures_seen": 3
+  "captures_seen": 3,
+  "presence": true,
+  "presence_confidence": 0.91
 }
 ```
 
@@ -54,6 +56,8 @@ by push, or by pull.
 | `threshold_applied` | The operating point in force when this record was produced. **Measured for the exact weights named in `weights_id`** — the engine refuses to start on weights whose operating point nobody has measured, rather than stamping a constant onto records a different model produced. |
 | `outcome` | `"answer"` or `"fallback"`. There is no third value. |
 | `captures_seen` | How many captures produced this record. Present so that one confident record and a batch that disagreed with itself are distinguishable afterwards. |
+| `presence` | Whether a **vehicle** was there. `true`, `false`, or `null` for NOT MEASURED. Never folded into `confidence`. |
+| `presence_confidence` | How far the measurement sat from the decision boundary. Not a probability, and not claimed to be one. `null` when presence was not measured. |
 
 ## Invariants the record itself enforces
 
@@ -70,6 +74,37 @@ never has to defend against them:
   timestamp is refused rather than assumed to be UTC.
 - `camera_id`, `read_id` and every populated `identity` field are strings.
 - `schema_version` is an integer. `true` is not `1` here, whatever Python says.
+
+## Presence is a different question from identity
+
+**"Is a vehicle there" and "can I read its plate" are not the same question, and
+the answers have opposite correct responses.**
+
+- `presence: false` — nothing was there. **Do not transact.** No ticket, no
+  session, no barrier. This is not a fallback; a fallback means a human deals
+  with a vehicle you could not identify, and it ends in a ticket. This ends in
+  nothing, because there is no car. Record it, so a lane being worked by
+  somebody tripping the loop with a piece of metal shows as a pattern rather
+  than as silence.
+- `presence: true`, `outcome: "fallback"` — a car is there and could not be
+  identified. A filthy, damaged or missing front plate is a **legitimate entry**.
+  Admit it to your fallback path. Refusing it is a bug in your integration.
+- `presence: null` — **nobody measured it.** Behave exactly as you would have
+  before this field existed. Do not read it as `false`: in most languages `null`
+  is falsy, and `if (!read.presence)` turns every deployment without a reference
+  view into one that refuses every customer.
+
+Two invariants the record enforces, so you never have to check them:
+
+- `presence: false` **cannot** carry an identity. Nothing was there to identify;
+  a record claiming both does not describe a bad read, it contradicts itself.
+- `presence: false` **cannot** be `outcome: "answer"`. There is nothing to stand
+  behind.
+
+Presence is additive and does **not** bump `schema_version`. A consumer written
+before it existed sees `outcome: "fallback"` for a non-vehicle, which is safe —
+it just cannot tell that case apart from an unreadable plate, which is the whole
+reason the field exists.
 
 ## A batch is one vehicle, and the engine checks
 
@@ -235,13 +270,18 @@ worse failure than losing the one read that was mid-write.
 
 Three things this release does NOT do, stated rather than left to be discovered:
 
-- **It cannot tell you there was no plate in the image.** The recogniser has no
-  rejection stage: it reads text out of noise, and out of a flat black frame.
-  Confidence filters most of that away, and submitting several captures of one
-  vehicle filters most of the rest — a noisy feed answers confidently on about
-  0.7% of three-capture reads, against 2.3% of single-capture ones. It is not
-  zero. If a wrong answer is expensive for you, keep a second gate of your own:
-  a permit list, a plausibility check, anything that is not this engine.
+- **The recogniser has no rejection stage of its own.** It reads text out of
+  noise and out of a flat black frame. The presence gate is what closes that —
+  measured, a noisy feed goes from 2.3% confident answers to 0.0% with the gate
+  in front — but the gate needs a reference view of the empty lane, and without
+  one presence is `null` and the old behaviour applies. **Configure the
+  reference.** And if a wrong answer is expensive for you, keep a second gate of
+  your own regardless: a permit list, a plausibility check, anything that is not
+  this engine.
+- **The gate has not been measured on real vehicles.** It is shown to reject
+  noise, a plate-sized object and scattered speckle, and to admit a readable
+  plate. Real lanes, real cars, real weather: NOT MEASURED until the bench. The
+  occupancy threshold is an assumption and is configurable for that reason.
 
 - **The service is not authenticated.** Anything that can reach the port can
   submit captures and read records, and a consumer cannot tell this engine from

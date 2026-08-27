@@ -23,12 +23,26 @@ from pathlib import Path
 from .contract import Capture
 from .engine import PlateEngine, UnmeasuredWeights
 from .plates.recognizer import DEFAULT_WEIGHTS
+from .presence import DEFAULT_MIN_OCCUPANCY, PresenceDetector
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
 
 def _add_engine_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
+    parser.add_argument(
+        "--empty-lane",
+        type=Path,
+        help="an image of the lane with nothing in it. Without one, presence is "
+             "reported as NOT MEASURED and nothing else changes",
+    )
+    parser.add_argument(
+        "--min-occupancy",
+        type=float,
+        default=DEFAULT_MIN_OCCUPANCY,
+        help="how much of the frame a vehicle is expected to fill. An assumption, "
+             "not a measurement -- it cannot be measured without lane footage",
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
         "--threshold",
@@ -70,6 +84,9 @@ def _images(folder: Path) -> list[Path]:
 
 def _print_human(read, source: str) -> None:
     identity = read.identity
+    if read.presence is False:
+        print(f"  NO VEHICLE          —            {source}")
+        return
     verdict = "ANSWER  " if read.is_answer else "FALLBACK"
     plate = identity.plate or "—"
     seen = f" [{read.captures_seen} captures]" if read.captures_seen > 1 else ""
@@ -83,9 +100,26 @@ def _print_human(read, source: str) -> None:
         )
 
 
+def _presence(args):
+    if not args.empty_lane:
+        return None
+    import cv2
+
+    reference = cv2.imread(str(args.empty_lane))
+    if reference is None:
+        print(f"could not read {args.empty_lane}", file=sys.stderr)
+        raise SystemExit(2)
+    return PresenceDetector(reference=reference, min_occupancy=args.min_occupancy)
+
+
 def _engine(args):
     try:
-        return PlateEngine(args.weights, device=args.device, threshold=args.threshold)
+        return PlateEngine(
+            args.weights,
+            device=args.device,
+            threshold=args.threshold,
+            presence=_presence(args),
+        )
     except UnmeasuredWeights as exc:
         print(f"\n{exc}\n", file=sys.stderr)
         return None
