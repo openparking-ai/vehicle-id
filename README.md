@@ -28,9 +28,15 @@ Three rules follow from it, and each is enforced by a test rather than a promise
   today because no slice measures them yet — not because the car had none. A
   plausible guess in one of those fields would be indistinguishable from a
   measurement to everything downstream.
-- **The operating threshold travels with the read.** `threshold_applied` is in
-  every record, so a consumer can see the operating point that produced the
-  outcome. It is **measured**, not chosen — see the harness below.
+- **The operating threshold travels with the read**, and it was measured for
+  *those exact weights*. `threshold_applied` is in every record. The engine
+  **refuses to start** on weights whose operating point nobody has measured,
+  rather than stamping a constant onto records a different model produced.
+- **A batch that disagrees with itself is a fallback.** Several captures are of
+  one vehicle; if more than one reads a plate confidently and they disagree,
+  the engine does not pick the higher score. That is a tailgater or a second
+  car in frame, and the honest answer is that it does not know which one is at
+  the barrier.
 - **An unknown `schema_version` is refused, not half-read.** A build that does
   not recognise the record it is handed says so rather than guessing which
   fields still mean what they used to.
@@ -41,6 +47,7 @@ Three rules follow from it, and each is enforced by a test rather than a promise
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev,engine]'
 python -m vehicle_id.plates.train        # weights are NOT committed; build your own
+python scripts/eval_plates.py --write-operating-point   # measure before you trust
 vehicle-id read ./some-photos
 ```
 
@@ -61,7 +68,7 @@ vehicle-id serve --push-to http://your-system.local/reads
 | `POST /v1/reads` | submit captures, get the record back — **synchronous**, for a caller with a vehicle in front of it |
 | `GET /v1/reads/last` | the most recent record |
 | `GET /v1/reads?since=N` | everything after a cursor, for a consumer catching up |
-| `GET /v1/health` | engine, version, weights digest, operating point |
+| `GET /v1/health` | engine, version, weights digest, operating point, push state — `degraded` when a read was lost |
 | push | every record POSTed to your URL as it happens, with a durable local queue |
 
 Push never loses a record: it is written to disk **before** delivery is
@@ -69,6 +76,16 @@ attempted and removed only once you have acknowledged it. Re-sends are therefore
 normal — `read_id` is stable across attempts, and you are expected to
 deduplicate on it. A `4xx` from you is treated as a refusal and dropped rather
 than retried forever, because retrying poison blocks everything behind it.
+Anything outstanding when the process stopped is delivered at startup, before
+the first vehicle of the day, and retried on a timer rather than waiting for
+the next car.
+
+Send `request_id`, or an `Idempotency-Key` header, and a re-sent submission
+returns the same record instead of becoming a second vehicle.
+
+**The service is not authenticated and the queue file is trusted local state.**
+Keep both where you would keep a credential — see
+[docs/CONTRACT.md](docs/CONTRACT.md).
 
 The full record, its field-by-field meaning and the compatibility rules are in
 [docs/CONTRACT.md](docs/CONTRACT.md).
@@ -118,6 +135,32 @@ ladder:
 > evaluating this against a commercial LPR unit, that unit's published number
 > and the number above are not comparable, and treating them as comparable is
 > the mistake this box exists to prevent.
+
+> ### It has no rejection capability, and that is measured too
+>
+> This recogniser reads text out of anything. Measured on 300 images per case,
+> with the reference weights:
+>
+> | shown | read something | mean confidence | cleared 0.99 |
+> |---|---|---|---|
+> | uniform sensor noise | 300/300 | 0.83 | **2.3%** |
+> | blurred noise | 300/300 | 0.61 | 0% |
+> | flat black / white / grey | 300/300 | 0.52–0.63 | 0% |
+>
+> So **confidence alone cannot tell a plate from snow.** A dead or noisy camera
+> feed produces a confident plate on roughly one single frame in forty.
+>
+> Reading several captures of one vehicle is what mitigates it, because noise
+> reads *differently* every frame and the batch then disagrees with itself:
+> **2.3% for one capture, 0.7% for three.** It does not reach zero. Rejecting an
+> image that contains no plate needs a detector, and that is the next slice —
+> named here rather than left to be discovered.
+>
+> A consumer with its own second gate is not exposed to the residual: measured
+> against a lane holding a 200-plate permit list, 2 confident noise reads out of
+> 300 opened **0** barriers, because a random string matches no rule. A garage
+> configured to allow everything it can identify has no such gate, and for that
+> configuration this number is the risk.
 
 **The recogniser is accurate AND overconfident**, which matters more than the
 accuracy: mean confidence barely moves across the ladder while accuracy falls.

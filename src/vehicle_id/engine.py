@@ -14,6 +14,7 @@ a number only the harness can produce.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -25,15 +26,24 @@ log = logging.getLogger(__name__)
 
 ENGINE_NAME = "openparking-vehicle-id/plates"
 
-#: MEASURED, not chosen. scripts/eval_plates.py, 10-rung ladder, 1500 plates:
-#: this is the cheapest threshold whose silent-wrong rate falls below 1%
-#: (0.87% wrong-but-answered, 30.9% sent to fallback).
+#: The operating point the harness measured for the REFERENCE weights, kept
+#: here as documentation of what a trained model looks like: the cheapest
+#: threshold whose silent-wrong rate falls below 1%.
+#:
+#: It is deliberately NOT the default any more. A constant cannot know which
+#: weights were loaded, and stamping it onto records produced by a different
+#: model is a measurement claim nobody measured. `PlateEngine` reads the
+#: operating point recorded beside the weights themselves, and refuses to start
+#: if there is not one.
 #:
 #: It is far above a naive 0.85 because this recogniser is accurate AND
 #: overconfident -- its mean confidence barely moves across the ladder while
-#: accuracy falls. Anything consuming this engine gets the value in every
-#: record's `threshold_applied` rather than having to know it.
-RECOMMENDED_CONFIDENCE_THRESHOLD = 0.99
+#: accuracy falls.
+REFERENCE_OPERATING_POINT = 0.99
+
+#: Kept as an alias so an existing caller does not silently get a different
+#: number; new code should read `threshold_applied` off the record instead.
+RECOMMENDED_CONFIDENCE_THRESHOLD = REFERENCE_OPERATING_POINT
 
 
 class PlateEngine:
@@ -43,15 +53,33 @@ class PlateEngine:
         self,
         weights: Path = DEFAULT_WEIGHTS,
         device: str = "cpu",
-        threshold: float = RECOMMENDED_CONFIDENCE_THRESHOLD,
+        threshold: float | None = None,
         version: str = "",
     ) -> None:
         self._recognizer = PlateRecognizer(weights, device=device)
-        self.threshold = threshold
+        digest = weights_id(weights)
+        self.threshold = _resolve_threshold(weights, digest, threshold)
+        measured = load_operating_point(weights) or {}
+        # Both are MEASURED per weights by the harness. Where an older sidecar
+        # does not carry them, the conservative reading applies: a spread of 0
+        # means any differing text counts as a different vehicle, and a noise
+        # ceiling of 0 means nothing is dismissed as noise. That errs towards
+        # falling back, which is the safe direction.
+        self.same_vehicle_spread = float(measured.get("same_vehicle_spread") or 0.0)
+        #: MEASURED, and recorded rather than used as a filter. For the
+        #: reference weights it is 0.9998: uniform sensor noise reads as text
+        #: on every frame, and 2.3% of those frames clear the 0.99 operating
+        #: point. Dismissing competitors below this ceiling would dismiss
+        #: almost all of them, which is the unsafe direction -- so it is
+        #: published, not applied. What protects against a dead camera feed is
+        #: the batch rule below: noise reads DIFFERENTLY every frame, so a
+        #: multi-capture read of a noisy feed disagrees with itself and falls
+        #: back.
+        self.noise_ceiling = float(measured.get("noise_confidence_ceiling") or 0.0)
         self._engine = Engine(
             name=ENGINE_NAME,
             version=version or _package_version(),
-            weights_id=weights_id(weights),
+            weights_id=digest,
         )
 
     @property
@@ -59,28 +87,75 @@ class PlateEngine:
         return self._engine
 
     def read(self, captures: Sequence[Capture]) -> Read:
-        """Identify from one or more captures of the same vehicle.
+        """Identify from one or more captures of the SAME vehicle.
 
         Always returns a record. There is no path through this method that
         raises instead of answering, because a consumer at a barrier needs an
         outcome, and "the engine threw" is not one a lane can act on.
         """
-        best_text, best_confidence = "", 0.0
-        camera_id = captures[0].camera_id if captures else ""
-        captured_at = captures[0].captured_at if captures else utc_now()
+        if not captures:
+            return self._record([], "", 0.0, None, disagreed=False)
 
-        # Best of the batch. Several captures exist precisely so that one bad
-        # moment -- a wiper, a headlight, a bump -- does not decide.
+        # Every capture is read, and every result is kept. Taking only the
+        # argmax and discarding the rest is what made a batch holding two
+        # different vehicles come back as one confident, coherent, WRONG
+        # record -- the engine held the disconfirming evidence and threw it
+        # away.
+        results: list[tuple[str, float, Capture]] = []
         for capture in captures:
             image = _decode(capture)
             if image is None:
                 continue
             text, confidence = self._recognizer.read(image)
-            if text and confidence > best_confidence:
-                best_text, best_confidence = text, confidence
+            if text:
+                results.append((normalise(text), confidence, capture))
 
+        if not results:
+            return self._record(captures, "", 0.0, None, disagreed=False)
+
+        best_text, best_confidence, best_capture = max(results, key=lambda r: r[1])
+
+        # Two captures of one vehicle cannot show two DIFFERENT vehicles. They
+        # can easily show two different readings of the same plate -- that is
+        # what a degraded frame is, and it is the whole reason best-of-batch
+        # exists -- so the question is which of those two this is, and it is
+        # answered with numbers the harness measured for these weights rather
+        # than with a guess:
+        #
+        #   * a competitor within the measured SAME-VEHICLE SPREAD of the
+        #     winner is another look at the same plate;
+        #   * anything else is a second vehicle in the batch, and then the
+        #     honest answer is that we do not know which one is at the barrier.
+        #
+        # Picking the higher score there produces a confident, coherent,
+        # in-contract record naming the wrong car, with nothing anywhere to say
+        # so. Falling back is loud; that is the point.
+        disagreed = False
+        for text, confidence, _ in results:
+            if text == best_text:
+                continue
+            if _distance(text, best_text) <= self.same_vehicle_spread:
+                continue
+            if confidence >= self.threshold or confidence >= best_confidence * 0.5:
+                disagreed = True
+                log.warning(
+                    "a second vehicle appears to be in this batch of %d; answering fallback",
+                    len(captures),
+                )
+                break
+
+        return self._record(captures, best_text, best_confidence, best_capture, disagreed)
+
+    def _record(
+        self,
+        captures: Sequence[Capture],
+        text: str,
+        confidence: float,
+        source: Capture | None,
+        disagreed: bool,
+    ) -> Read:
         identity = Identity(
-            plate=best_text or None,
+            plate=text or None,
             # Not invented. The slices that measure these have not been built.
             plate_region=None,
             make=None,
@@ -88,17 +163,117 @@ class PlateEngine:
             color=None,
             marks=(),
         )
-        answered = bool(best_text) and best_confidence >= self.threshold
+        answered = bool(text) and confidence >= self.threshold and not disagreed
         return Read(
             read_id=new_read_id(),
-            captured_at=captured_at,
-            camera_id=camera_id,
+            # The contract says captured_at is when the FIRST capture was taken.
+            # camera_id, though, is the camera the answer actually came from --
+            # not the first camera in the list, which is how a plate read off a
+            # staff camera used to be stamped with the entry lane's id.
+            captured_at=captures[0].captured_at if captures else utc_now(),
+            camera_id=(source or (captures[0] if captures else None)).camera_id
+            if (source or captures)
+            else "unknown",
             identity=identity,
-            confidence=best_confidence,
+            confidence=confidence,
             engine=self._engine,
             threshold_applied=self.threshold,
             outcome=ANSWER if answered else FALLBACK,
+            captures_seen=len(captures),
         )
+
+
+def _distance(a: str, b: str) -> int:
+    """Levenshtein. Same implementation the harness measures the spread with."""
+    if a == b:
+        return 0
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        current = [i]
+        for j, cb in enumerate(b, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (ca != cb)))
+        previous = current
+    return previous[-1]
+
+
+def normalise(text: str) -> str:
+    """Compare registrations, not layout: case and spacing are not the answer."""
+    return "".join(ch for ch in text.upper() if ch.isalnum())
+
+
+def _resolve_threshold(weights: Path, digest: str | None, explicit: float | None) -> float:
+    """The operating point for THESE weights, or a refusal to start.
+
+    A module constant stamped onto every record regardless of which weights were
+    loaded is not a measurement, however carefully it was measured once. Running
+    the default smoke model and stamping 0.99 beside a comment claiming that
+    number was measured for it is exactly the shape of a silent wrong answer --
+    it happens to be safe today only because that model answers nothing.
+
+    So: an explicit threshold is honoured and reported as applied, because it
+    IS applied. Otherwise the operating point must have been MEASURED for these
+    exact weights, by the harness, and recorded beside them. If it has not been,
+    this refuses to construct rather than inventing a number.
+    """
+    if explicit is not None:
+        return explicit
+    measured = load_operating_point(weights)
+    if measured is None:
+        raise UnmeasuredWeights(
+            f"no measured operating point for {weights}. It is not a number to "
+            "guess: run\n"
+            f"    python scripts/eval_plates.py --weights {weights} "
+            "--write-operating-point\n"
+            "or pass an explicit threshold if you know what you are choosing."
+        )
+    if measured.get("weights_id") != digest:
+        raise UnmeasuredWeights(
+            f"the operating point beside {weights} was measured for "
+            f"{measured.get('weights_id')!r}, but the weights on disk are {digest!r}. "
+            "Refusing to apply an operating point measured against a different model."
+        )
+    return float(measured["threshold"])
+
+
+class UnmeasuredWeights(RuntimeError):
+    """Raised rather than inventing an operating point for unmeasured weights."""
+
+
+def operating_point_path(weights: Path) -> Path:
+    return Path(weights).with_suffix(".operating-point.json")
+
+
+def load_operating_point(weights: Path) -> dict | None:
+    path = operating_point_path(weights)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_operating_point(
+    weights: Path,
+    threshold: float,
+    evidence: dict,
+    same_vehicle_spread: float | None = None,
+    noise_confidence_ceiling: float | None = None,
+) -> Path:
+    """Record what the harness measured, bound to the weights it measured it on."""
+    path = operating_point_path(weights)
+    path.write_text(
+        json.dumps(
+            {
+                "threshold": threshold,
+                "same_vehicle_spread": same_vehicle_spread,
+                "noise_confidence_ceiling": noise_confidence_ceiling,
+                "weights_id": weights_id(weights),
+                "measured_at": utc_now(),
+                "evidence": evidence,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def weights_id(weights: Path) -> str | None:

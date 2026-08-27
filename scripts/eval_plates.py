@@ -77,6 +77,52 @@ def _levenshtein(a: str, b: str) -> int:
     return previous[-1]
 
 
+def same_vehicle_spread(reader, sets) -> float:
+    """How far apart two readings of the SAME plate get, at the 99.5th centile.
+
+    This is the number the engine needs to tell "a degraded second look at the
+    car in front of me" from "a second car in the frame". It is measured, not
+    chosen: the same plate is read at every rung of the ladder and every pair of
+    successful readings is compared, so the answer comes from this model's own
+    behaviour on this generator rather than from somebody's intuition about how
+    wrong OCR usually is.
+    """
+    distances = []
+    per_plate: dict[str, list[str]] = {}
+    for samples in sets.values():
+        for sample in samples:
+            got, _ = reader.read(sample.image)
+            if got:
+                per_plate.setdefault(normalise(sample.text), []).append(normalise(got))
+    for readings in per_plate.values():
+        for i, a in enumerate(readings):
+            for b in readings[i + 1:]:
+                distances.append(_levenshtein(a, b))
+    if not distances:
+        return 0.0
+    distances.sort()
+    index = min(len(distances) - 1, int(0.995 * len(distances)))
+    return float(distances[index])
+
+
+def noise_ceiling(reader, count: int = 200) -> float:
+    """The highest confidence this model gives to an image with no plate in it.
+
+    A competitor reading below this is indistinguishable from the engine
+    reading shapes out of noise, and must not be allowed to send a good read to
+    fallback.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    best = 0.0
+    for _ in range(count):
+        image = rng.integers(0, 255, (160, 320, 3), dtype=np.uint8)
+        _, confidence = reader.read(image)
+        best = max(best, confidence)
+    return best
+
+
 def timing(reader, samples, label: str) -> float:
     reader.read(samples[0].image)
     times = []
@@ -95,6 +141,12 @@ def main() -> int:
     ap.add_argument("--weights", type=Path, default=Path("models/plate_crnn.pt"))
     ap.add_argument("--json-out", type=Path)
     ap.add_argument("--skip-baseline", action="store_true")
+    ap.add_argument(
+        "--write-operating-point",
+        action="store_true",
+        help="record the measured operating point beside the weights, so the "
+             "engine can apply a number that was measured for THESE weights",
+    )
     args = ap.parse_args()
 
     print("=" * 78)
@@ -172,6 +224,34 @@ def main() -> int:
                   f"fallback {best[2]:.1f}%")
         else:
             print("     -> NO threshold reaches <1% silent-wrong on this ladder.")
+
+        if args.write_operating_point and name.startswith("ours"):
+            if not best:
+                # Refusing to write one is the honest outcome: these weights have
+                # no operating point that meets the bar, and the engine must not
+                # be handed a number that pretends otherwise.
+                print("     -> NOT written: no threshold on this ladder qualifies.")
+            else:
+                from vehicle_id.engine import write_operating_point
+
+                spread = same_vehicle_spread(reader, sets)
+                ceiling = noise_ceiling(reader)
+                print(f"     -> same-vehicle reading spread (p99.5): {spread:.0f} characters")
+                print(f"     -> noise confidence ceiling: {ceiling:.4f}")
+                written = write_operating_point(
+                    args.weights,
+                    best[0],
+                    {
+                        "silent_wrong_pct": best[1],
+                        "fallback_pct": best[2],
+                        "per_rung": args.per_rung,
+                        "rungs": len(LADDER),
+                        "eval_seed": EVAL_SEED,
+                    },
+                    same_vehicle_spread=spread,
+                    noise_confidence_ceiling=ceiling,
+                )
+                print(f"     -> wrote {written}")
 
     print("\n NOT MEASURABLE, and why (V3 requires saying so rather than omitting it)")
     print("   full-identity accuracy   : requires bench ground truth pairing plate with")

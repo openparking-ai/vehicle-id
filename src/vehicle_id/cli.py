@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from .contract import Capture
-from .engine import RECOMMENDED_CONFIDENCE_THRESHOLD, PlateEngine
+from .engine import PlateEngine, UnmeasuredWeights
 from .plates.recognizer import DEFAULT_WEIGHTS
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
@@ -33,8 +33,10 @@ def _add_engine_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--threshold",
         type=float,
-        default=RECOMMENDED_CONFIDENCE_THRESHOLD,
-        help="operating point; the default is the MEASURED one (scripts/eval_plates.py)",
+        default=None,
+        help="override the operating point. By default the engine uses the one "
+             "MEASURED for these exact weights and refuses to start if there is "
+             "not one -- see scripts/eval_plates.py --write-operating-point",
     )
 
 
@@ -70,7 +72,8 @@ def _print_human(read, source: str) -> None:
     identity = read.identity
     verdict = "ANSWER  " if read.is_answer else "FALLBACK"
     plate = identity.plate or "—"
-    print(f"  {verdict}  {plate:<12} confidence {read.confidence:.3f}  {source}")
+    seen = f" [{read.captures_seen} captures]" if read.captures_seen > 1 else ""
+    print(f"  {verdict}  {plate:<12} confidence {read.confidence:.3f}  {source}{seen}")
     if not read.is_answer:
         # Said out loud every time, because this is the property the product is
         # sold on and the one an evaluator is most likely to misread as a bug.
@@ -78,6 +81,14 @@ def _print_human(read, source: str) -> None:
             f"            below the measured operating point "
             f"({read.threshold_applied:.3f}) — not an error, an answer"
         )
+
+
+def _engine(args):
+    try:
+        return PlateEngine(args.weights, device=args.device, threshold=args.threshold)
+    except UnmeasuredWeights as exc:
+        print(f"\n{exc}\n", file=sys.stderr)
+        return None
 
 
 def cmd_read(args) -> int:
@@ -90,7 +101,9 @@ def cmd_read(args) -> int:
         print(f"no images in {folder}", file=sys.stderr)
         return 2
 
-    engine = PlateEngine(args.weights, device=args.device, threshold=args.threshold)
+    engine = _engine(args)
+    if engine is None:
+        return 2
 
     if args.per_vehicle:
         captures = [Capture.now(p.read_bytes(), p.name) for p in images]
@@ -118,7 +131,9 @@ def cmd_serve(args) -> int:
     from .push import ReadPusher
     from .service import VehicleIdService, make_server
 
-    engine = PlateEngine(args.weights, device=args.device, threshold=args.threshold)
+    engine = _engine(args)
+    if engine is None:
+        return 2
     pusher = ReadPusher(args.push_to, args.queue) if args.push_to else None
     service = VehicleIdService(engine, pusher=pusher)
     server = make_server(service, host=args.host, port=args.port)

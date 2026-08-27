@@ -86,15 +86,7 @@ jobs:
           python -m vehicle_id.plates.train \
             --steps 600 --train-size 4000 --batch-size 32 --device cpu
 
-      - name: Engine tests, including never-wrong-silently
-        run: pytest tests/test_plates.py -q
-
-      - name: The harness runs and reports
-        run: python scripts/eval_plates.py --per-rung 40 --skip-baseline
-
-      - name: The CLI reads a folder with no system present
-        # The definition of done, run as a check: someone with no parking
-        # system points this at images and gets records back.
+      - name: Make a folder of images to evaluate
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -104,4 +96,30 @@ jobs:
           for i, sample in enumerate(PlateGenerator(seed=5).batch(3)):
               cv2.imwrite(str(out / f"plate{i}.png"), sample.image)
           PY
-          python -m vehicle_id.cli read /tmp/plates
+
+      - name: Engine tests, including never-wrong-silently
+        run: pytest tests/test_plates.py -q
+
+      - name: The harness runs, reports, and records the operating point
+        # --write-operating-point is what lets the engine start below. The
+        # engine refuses to run on weights whose operating point nobody has
+        # measured, rather than stamping a constant onto records produced by a
+        # model it was not measured for.
+        run: |
+          python scripts/eval_plates.py --per-rung 40 --skip-baseline \
+            --write-operating-point
+
+      - name: An unmeasured model must refuse to start
+        # The control for the step above. If the engine would happily run
+        # without a measured operating point, recording one proves nothing.
+        run: |
+          cp models/plate_crnn.pt /tmp/unmeasured.pt
+          if python -m vehicle_id.cli read /tmp/plates --weights /tmp/unmeasured.pt; then
+            echo "engine started on weights with no measured operating point"; exit 1
+          fi
+          echo "refused, as required"
+
+      - name: The CLI reads a folder with no system present
+        # The definition of done, run as a check: someone with no parking
+        # system points this at images and gets records back.
+        run: python -m vehicle_id.cli read /tmp/plates

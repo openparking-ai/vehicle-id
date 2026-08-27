@@ -36,7 +36,8 @@ by push, or by pull.
     "weights_id": "sha256:4f19c0a7b3e5d281"
   },
   "threshold_applied": 0.99,
-  "outcome": "answer"
+  "outcome": "answer",
+  "captures_seen": 3
 }
 ```
 
@@ -50,8 +51,40 @@ by push, or by pull.
 | `identity.marks` | Distinguishing appearance. Empty means "none were measured", never "the vehicle had none". |
 | `confidence` | `[0, 1]`, the engine's own measure for this read. |
 | `engine.weights_id` | A digest of the weights actually loaded, not a label somebody typed. Two records that disagree are only worth investigating if you can tell whether the same model produced them. |
-| `threshold_applied` | The operating point in force when this record was produced. |
+| `threshold_applied` | The operating point in force when this record was produced. **Measured for the exact weights named in `weights_id`** — the engine refuses to start on weights whose operating point nobody has measured, rather than stamping a constant onto records a different model produced. |
 | `outcome` | `"answer"` or `"fallback"`. There is no third value. |
+| `captures_seen` | How many captures produced this record. Present so that one confident record and a batch that disagreed with itself are distinguishable afterwards. |
+
+## Invariants the record itself enforces
+
+These are checked when a record is built and when one is parsed, so a consumer
+never has to defend against them:
+
+- `outcome == "answer"` implies `confidence >= threshold_applied`. A record
+  cannot claim the engine stood behind it while carrying a confidence the
+  stated operating point would have rejected.
+- `confidence` and `threshold_applied` are finite numbers within `[0, 1]`.
+  Booleans are refused — `true` is not a measurement, and Python would
+  otherwise read it as `1.0`.
+- `captured_at` parses as ISO 8601 **and carries a UTC offset**. A naive
+  timestamp is refused rather than assumed to be UTC.
+- `camera_id`, `read_id` and every populated `identity` field are strings.
+- `schema_version` is an integer. `true` is not `1` here, whatever Python says.
+
+## A batch is one vehicle, and the engine checks
+
+`POST /v1/reads` takes several captures **of one vehicle**. If more than one of
+them reads a plate confidently and they disagree, the engine does not pick the
+higher score: it answers `fallback`, and `captures_seen` records how many it
+was given.
+
+That case is a second vehicle in frame, a tailgater, or a mixed-up buffer, and
+the honest answer is that the engine does not know which car is at the barrier.
+Picking the strongest read would produce a confident, coherent, in-contract
+record naming the wrong car, with nothing anywhere to say so.
+
+`camera_id` on the record is the camera the ANSWER came from, not the first
+camera in the batch.
 
 ## `fallback` is an answer
 
@@ -137,6 +170,17 @@ X-Camera-Id: lane-1-entry
 
 Both return the same record shape, wrapped as `{"cursor": N, "read": {...}}`.
 
+### Retrying a submission
+
+Send `request_id` in the body, or an `Idempotency-Key` header. Re-sending the
+same key returns the **same record**, and the engine does not run again.
+
+This matters more than it looks. If your request times out while the engine is
+still working, the engine finishes, and — with push configured — delivers a
+complete `answer` record for that vehicle. Without a key, asking again produces
+a second record with a fresh `read_id` for one car, and a consumer doing exactly
+what this document says (deduplicate on `read_id`) records two vehicles.
+
 ## Pull, and the cursor
 
 `GET /v1/reads?since=N` returns every record with a cursor greater than `N`,
@@ -144,6 +188,12 @@ plus the current cursor. The cursor is monotonic within one run of the service
 and is **not** durable across a restart: it is a catch-up window for a consumer
 that blinked, not a record of anything. The durable copy of a record belongs to
 whoever consumes it — and to the push queue until they have it.
+
+If `since` is ahead of the service's own cursor, the response carries
+`"reset": true`. That means the service restarted and your saved position no
+longer refers to anything. An empty list without that flag would be
+indistinguishable from "nothing happened", which is how a consumer silently
+misses every read after a restart.
 
 A consumer that needs guaranteed delivery should use push, not polling.
 
@@ -163,6 +213,44 @@ Configure a URL and every record is POSTed to it as it happens, as
 - **A `4xx` from you is a refusal, and the record is dropped and counted**, not
   retried forever. Retrying poison blocks everything queued behind it. Anything
   else — a timeout, a `5xx`, a closed socket — is retried.
+
+## Knowing when it is unwell
+
+`GET /v1/health` reports the engine, its version, the weights digest, the
+operating point, and — when push is configured — `delivered`, `refused`,
+`pending`, `lost`, `damaged` and the last error.
+
+`status` is `"degraded"`, not `"ok"`, when a read was **lost** (it could not
+even be written to the queue — a full disk, a permissions change) or when the
+queue held a line this build could not read. Those are the two cases where a
+record was answered and then existed nowhere, so they are the two cases health
+has to be able to say out loud.
+
+A torn line — the queue was being appended to when the power went — is
+quarantined to `<queue>.damaged`, counted, and logged. It does not stop the
+service starting. A barrier dead until somebody finds a bad line at 2am is a
+worse failure than losing the one read that was mid-write.
+
+## Deploying it safely
+
+Three things this release does NOT do, stated rather than left to be discovered:
+
+- **It cannot tell you there was no plate in the image.** The recogniser has no
+  rejection stage: it reads text out of noise, and out of a flat black frame.
+  Confidence filters most of that away, and submitting several captures of one
+  vehicle filters most of the rest — a noisy feed answers confidently on about
+  0.7% of three-capture reads, against 2.3% of single-capture ones. It is not
+  zero. If a wrong answer is expensive for you, keep a second gate of your own:
+  a permit list, a plausibility check, anything that is not this engine.
+
+- **The service is not authenticated.** Anything that can reach the port can
+  submit captures and read records, and a consumer cannot tell this engine from
+  another process that bound the port first. Keep it on loopback, or on a
+  segment you control. Do not expose it.
+- **The push queue is trusted local state.** It is a plain file, created `0600`,
+  and whatever is in it is delivered. Anything that can write to it can put a
+  record of its choosing in front of your consumer. Protect it as you would a
+  credential.
 
 ## Local only
 

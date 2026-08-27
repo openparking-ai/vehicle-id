@@ -13,6 +13,7 @@ rather than declared.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -22,11 +23,14 @@ pytest.importorskip("cv2")
 
 import cv2  # noqa: E402
 
-from vehicle_id.contract import FALLBACK, Capture  # noqa: E402
+from vehicle_id.contract import ANSWER, FALLBACK, Capture  # noqa: E402
 from vehicle_id.engine import RECOMMENDED_CONFIDENCE_THRESHOLD, PlateEngine  # noqa: E402
 from vehicle_id.plates.generator import PlateGenerator  # noqa: E402
 
-WEIGHTS = Path("models/plate_crnn.pt")
+#: CI trains a small model at the default path; a full local run can point at
+#: properly trained weights so the assertions that need a real confidence
+#: signal actually execute instead of skipping.
+WEIGHTS = Path(os.environ.get("VEHICLE_ID_TEST_WEIGHTS", "models/plate_crnn.pt"))
 needs_weights = pytest.mark.skipif(
     not WEIGHTS.exists(), reason="no trained weights; run the train module first"
 )
@@ -232,3 +236,166 @@ def test_the_measured_threshold_travels_with_the_engine():
     act on reads the harness measured as wrong 4.4% of the time. The engine
     publishes the measured operating point, and ships it in every record."""
     assert RECOMMENDED_CONFIDENCE_THRESHOLD >= 0.99
+
+
+# --- a batch that is not one vehicle --------------------------------------
+
+@needs_weights
+def test_two_vehicles_in_one_batch_is_a_fallback_not_the_higher_score(clean_confidence):
+    """The silent-wrongness path this engine most needed closing.
+
+    Identity used to come from `max(confidence)` across the batch, with the
+    timestamp and camera taken from the first capture and nothing recording
+    that the batch disagreed. Three individually confident plates in one
+    request produced ONE coherent, in-contract, above-threshold record naming
+    the wrong car -- and the engine had held the disconfirming evidence and
+    thrown it away.
+
+    Two captures of one vehicle cannot show two different plates. When more
+    than one clears the operating point and they disagree, the honest answer is
+    that we do not know which car is at the barrier.
+    """
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    strict = PlateEngine(WEIGHTS, threshold=clean_confidence * 0.9)
+    a = PlateGenerator(seed=201).sample(degradation=0)
+    b = PlateGenerator(seed=202).sample(degradation=0)
+    assert a.text != b.text
+
+    alone_a = strict.read([as_capture(a.image)])
+    alone_b = strict.read([as_capture(b.image)])
+    if not (alone_a.is_answer and alone_b.is_answer):
+        pytest.skip("both plates must be individually confident for this to mean anything")
+
+    together = strict.read([as_capture(a.image), as_capture(b.image)])
+    assert together.outcome == FALLBACK, (
+        f"a batch showing {alone_a.identity.plate} and {alone_b.identity.plate} "
+        "answered confidently instead of falling back"
+    )
+    assert together.captures_seen == 2
+
+
+@needs_weights
+def test_agreeing_captures_of_one_vehicle_still_answer(clean_confidence):
+    """The control. A guard that turns every multi-capture batch into a
+    fallback would be safe and useless -- grabbing several frames is the whole
+    reason one bad moment does not decide."""
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    strict = PlateEngine(WEIGHTS, threshold=clean_confidence * 0.9)
+    sample = PlateGenerator(seed=203).sample(degradation=0)
+    read = strict.read([as_capture(sample.image), as_capture(sample.image)])
+    assert read.outcome == ANSWER
+    assert read.captures_seen == 2
+
+
+@needs_weights
+def test_the_record_names_the_camera_the_answer_came_from(clean_confidence):
+    """A plate read off one camera must not be stamped with another's id.
+
+    The mixed-provenance case: the vehicle at the barrier is unreadable, and a
+    pristine frame of a different vehicle arrives from a different camera. The
+    record used to carry the entry lane's camera_id beside the other camera's
+    plate.
+    """
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    import cv2 as _cv2
+
+    strict = PlateEngine(WEIGHTS, threshold=clean_confidence * 0.9)
+    unreadable = PlateGenerator(seed=204).sample(degradation=9)
+    readable = PlateGenerator(seed=205).sample(degradation=0)
+
+    def at(image, camera_id):
+        ok, buf = _cv2.imencode(".png", image)
+        assert ok
+        return Capture.now(buf.tobytes(), camera_id=camera_id)
+
+    read = strict.read([at(unreadable.image, "lane-1-entry"), at(readable.image, "lane-9-STAFF")])
+    if read.identity.plate is None:
+        pytest.skip("neither frame was read; nothing to attribute")
+    assert read.camera_id == "lane-9-STAFF", (
+        "the record named a camera the answer did not come from"
+    )
+
+
+@needs_weights
+def test_unmeasured_weights_refuse_to_start_rather_than_inventing_a_threshold(tmp_path):
+    """A constant cannot know which weights were loaded.
+
+    The default engine used to stamp 0.99 onto every record whatever model was
+    in memory, beside a comment claiming that number was measured for it.
+    """
+    import shutil
+
+    from vehicle_id.engine import UnmeasuredWeights
+
+    copy = tmp_path / "unmeasured.pt"
+    shutil.copy(WEIGHTS, copy)
+    with pytest.raises(UnmeasuredWeights, match="no measured operating point"):
+        PlateEngine(copy)
+
+
+@needs_weights
+def test_an_operating_point_measured_for_other_weights_is_refused(tmp_path):
+    """The control that matters more than the one above: a sidecar is only
+    worth anything if it is bound to the model it was measured on."""
+    import json
+    import shutil
+
+    from vehicle_id.engine import UnmeasuredWeights, operating_point_path
+
+    copy = tmp_path / "borrowed.pt"
+    shutil.copy(WEIGHTS, copy)
+    operating_point_path(copy).write_text(
+        json.dumps({"threshold": 0.5, "weights_id": "sha256:somebodyelses"})
+    )
+    with pytest.raises(UnmeasuredWeights, match="measured for"):
+        PlateEngine(copy)
+
+
+@needs_weights
+def test_a_noisy_feed_is_mostly_but_not_entirely_refused(clean_confidence):
+    """A measured limitation, pinned so it cannot quietly get worse.
+
+    This recogniser has NO rejection capability: it returns text for a flat
+    black image, and for uniform sensor noise it returns text on every frame at
+    a mean confidence of 0.83, with 2.3% of single frames clearing the measured
+    operating point. Confidence alone cannot tell a plate from snow.
+
+    Reading several captures helps, because noise reads differently every
+    frame and the batch then disagrees with itself -- measured at 0.7% for
+    three captures against 2.3% for one. It does not reach zero, and pretending
+    otherwise is the thing this project exists not to do. Rejecting an image
+    with no plate in it needs a detector, which is the next slice.
+    """
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    import cv2 as _cv2
+    import numpy as np
+
+    engine = PlateEngine(WEIGHTS)
+    rng = np.random.default_rng(0)
+
+    def noise_capture():
+        image = rng.integers(0, 255, (160, 320, 3), dtype=np.uint8)
+        ok, buf = _cv2.imencode(".png", image)
+        assert ok
+        return Capture.now(buf.tobytes(), camera_id="dead-feed")
+
+    answered = 0
+    for _ in range(200):
+        if engine.read([noise_capture() for _ in range(3)]).is_answer:
+            answered += 1
+    rate = answered / 200
+
+    # Not asserting zero, because it is not zero. Asserting that batching is
+    # doing its job and that the number has not drifted upwards.
+    assert rate <= 0.03, (
+        f"{rate:.1%} of noisy-feed reads answered confidently; the batch "
+        "disagreement rule has stopped working"
+    )

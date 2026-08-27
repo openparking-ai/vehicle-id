@@ -238,3 +238,70 @@ def test_the_retry_timer_delivers_without_any_new_traffic(tmp_path):
     assert [r["read_id"] for r in consumer.received] == ["waiting"], (
         "nothing was retried without a new read arriving"
     )
+
+
+# --- the queue as a hostile file ------------------------------------------
+
+def test_a_torn_line_does_not_stop_the_service_starting(tmp_path):
+    """A power cut mid-append leaves a partial line.
+
+    Raising on it took the whole engine down at startup -- the lane dead until
+    someone found the bad line at 2am. That is a far worse failure than losing
+    the one read that was being written when the power went.
+    """
+    queue = tmp_path / "q.jsonl"
+    queue.write_text(
+        json.dumps(a_read("intact").to_dict()) + "\n" + '{"read_id": "torn", "captu',
+        encoding="utf-8",
+    )
+    consumer = Consumer()
+    p = ReadPusher("http://consumer.invalid/reads", queue, opener=consumer)
+    p.start()
+    try:
+        assert [r["read_id"] for r in consumer.received] == ["intact"]
+        assert p.queue.damaged_count == 1
+        assert p.queue.damaged.exists(), "the unreadable line was discarded rather than kept"
+    finally:
+        p.stop()
+
+
+def test_a_failed_append_is_reported_as_loss_not_as_a_deferred_delivery(tmp_path):
+    """The read may exist nowhere. Saying 'it is queued' over the top of that is
+    the difference between a problem someone finds and one nobody does."""
+    queue = tmp_path / "q.jsonl"
+    queue.write_text("", encoding="utf-8")
+    queue.chmod(0o444)
+    p = ReadPusher("http://consumer.invalid/reads", queue, opener=Consumer())
+    try:
+        with pytest.raises(PermissionError):
+            p.submit(a_read("doomed"))
+        assert p.stats.lost == 1
+        assert p.stats.as_dict()["last_error"]
+    finally:
+        queue.chmod(0o644)
+
+
+def test_settling_a_duplicate_read_id_removes_one_copy_not_both(tmp_path):
+    """The contract says duplicate read_ids are normal -- a re-send, a restored
+    backup. Removing by identity took out a copy whose delivery had just failed
+    and which was still owed to the consumer."""
+    delivered = []
+    calls = {"n": 0}
+
+    def once_then_fail(url, payload, timeout):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise ConnectionError("down")
+        delivered.append(payload["identity"]["plate"])
+
+    p = ReadPusher("http://consumer.invalid/reads", tmp_path / "q.jsonl", opener=once_then_fail)
+    first = a_read("dup")
+    second = Read.from_dict({**a_read("dup").to_dict(), "identity": {"plate": "CAR-B"}})
+    p.queue.append(first)
+    p.queue.append(second)
+
+    p.flush()
+    assert delivered == ["ABC123"]
+    remaining = p.queue.load()
+    assert len(remaining) == 1, "both copies were removed; one was still owed"
+    assert remaining[0].identity.plate == "CAR-B"
