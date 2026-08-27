@@ -256,3 +256,102 @@ def test_the_gate_does_not_move_the_number_by_refusing_everything():
     assert read.presence is True
     assert read.identity.plate == "7ABC123"
     assert read.is_answer
+
+
+# --- K1b: the disclosure is at the SEAM, and something checks that ---------
+
+@guarantee
+def test_the_health_endpoint_states_that_presence_is_unvalidated_and_why():
+    """H4's standard, as a check rather than a convention.
+
+    Two documents nobody reads is not the acceptance. `GET /v1/health` is where
+    an operator looks, and a capability reported without its status reads as a
+    validated one -- so the endpoint carries the disclosure and its named
+    limitations, and this is what stops a refactor dropping them silently.
+
+    The previous round put the string in and nothing asserted it. That is the
+    same shape as a guarantee that skips: present, plausible, and unproven.
+    """
+    from vehicle_id.presence import KNOWN_LIMITS, UNVALIDATED
+    from vehicle_id.service import VehicleIdService
+
+    service = VehicleIdService(engine_with(PresenceDetector(reference=lane(90, seed=1)),
+                                           StubRecognizer()))
+    health = service.health()
+    assert health["presence_gate"] is True
+    assert health["presence_validation"] == UNVALIDATED
+    assert "UNVALIDATED" in health["presence_validation"]
+    assert health["presence_limits"] == list(KNOWN_LIMITS)
+    assert health["presence_limits"], "the endpoint names no limitations at all"
+
+
+@guarantee
+def test_every_limitation_the_documents_measure_is_named_at_the_seam():
+    """The coverage control for the test above, and the one that matters.
+
+    A seam carrying a disclosure nobody keeps in step with the measurement is
+    worse than none: it reads as current. Each thing the evidence file measures
+    the gate CANNOT do has to be named at the seam, so that adding a measured
+    limitation to the documents without telling the operator turns this red.
+
+    Matched on topic rather than on numbers deliberately. Every number about
+    this gate is generated into the documents from the evidence and checked
+    against it; a number hard-coded into a runtime string could not be, and
+    would go stale exactly the way the sentence beside a correct span did.
+    """
+    from vehicle_id.presence import KNOWN_LIMITS
+
+    spoken = " ".join(KNOWN_LIMITS).lower()
+    for topic, word in (
+        ("smooth or untextured ground", "smooth"),
+        ("weather in an open-air entry", "rain"),
+        ("the metal-plate case in that band", "metal plate"),
+        ("a headlight pool before the car arrives", "headlight"),
+        ("that it fails to null rather than refusing", "null"),
+    ):
+        assert word in spoken, (
+            f"the seam does not mention {topic}; the documents measure it and the "
+            "operator switching the gate on is not told"
+        )
+
+
+@guarantee
+def test_the_cli_says_it_at_the_moment_somebody_switches_the_gate_on(tmp_path, capsys):
+    """The other seam. The contract and the README both carry this, and neither
+    is read by the person typing `--empty-lane` at 6am.
+
+    Presence is off by default precisely so that turning it on is a decision,
+    and a decision nobody was told about is not one.
+    """
+    import argparse
+
+    import cv2
+
+    from vehicle_id.cli import _presence
+    from vehicle_id.presence import KNOWN_LIMITS
+
+    reference = tmp_path / "empty-lane.png"
+    cv2.imwrite(str(reference), lane(90, seed=1))
+    detector = _presence(
+        argparse.Namespace(empty_lane=reference, min_occupancy=0.15)
+    )
+    assert detector is not None and detector.has_reference
+
+    said = capsys.readouterr().err
+    assert "UNVALIDATED" in said, "the CLI does not say the gate is unvalidated"
+    for limit in KNOWN_LIMITS:
+        assert limit in said, f"the CLI does not state the limitation: {limit[:50]}..."
+
+
+@guarantee
+def test_the_cli_says_nothing_when_the_gate_is_left_off(capsys):
+    """The control. A warning printed unconditionally is noise, and noise is
+    what an operator learns to skip past -- which would defeat the seam."""
+    import argparse
+
+    from vehicle_id.cli import _presence
+
+    assert _presence(argparse.Namespace(empty_lane=None, min_occupancy=0.15)) is None
+    assert capsys.readouterr().err == "", (
+        "the CLI warns about a gate that is not switched on"
+    )

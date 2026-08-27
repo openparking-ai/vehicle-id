@@ -40,10 +40,19 @@ LUMINANCE term dropped, per window: a car at the tarmac's own luminance still
 occludes the tarmac's stone texture, its markings and its drain.
 
 That change did not come free, and the cost is measured rather than argued away:
-see `docs/measured/presence.json`. It does not separate vehicle from empty on
-near-featureless ground, and heavy weather stops it answering where the old
-measure answered correctly. Both fail to `None`. No case measured produces a
-wrongful `False`, which is the property that was worth buying.
+see `docs/measured/presence.json`, and the generated sections of README.md and
+docs/CONTRACT.md, which are rendered from it. It does not separate vehicle from
+empty on near-featureless ground. And in weather it does NOT simply stop
+answering, which is what the release before this one claimed in both published
+documents while its own evidence file said otherwise: it passes through a band
+in which an EMPTY lane reads as occupied -- and the metal plate on the loop with
+it -- before it gives up and returns `None`. A bright enough headlight pool does
+the same. Those bands are published as tables rather than described in a
+sentence, because a sentence beside a correct number is exactly what went wrong.
+
+What no measured case produces is a wrongful `False`, and that is the property
+that was worth buying: 124 scenes containing a vehicle, across the matrix,
+weather and beam pools, with no refusal in any of them.
 
 **Three states, not two.** `True`, `False`, and `None` for NOT MEASURED. Without
 a reference view of the empty lane there is nothing to compare against, and the
@@ -199,6 +208,39 @@ DEFAULT_MIN_REFERENCE_MATCH = 0.10
 #: The gain the illumination fit is allowed to reach before the capture is
 #: judged not to be a view of this lane at all.
 GAIN_LIMITS = (0.2, 5.0)
+
+#: What a garage operator is told AT THE MOMENT they switch this on, and what
+#: `GET /v1/health` reports for as long as it is on.
+#:
+#: It lives here, once, because it has to appear at two seams and a limitation
+#: that is stated in one place and forgotten at the other is how the previous
+#: round shipped: the README and the contract both described this gate's weather
+#: behaviour, and the person typing `--empty-lane` at 6am reads neither.
+#:
+#: Deliberately QUALITATIVE. Every number about this gate is generated into the
+#: documents from `docs/measured/presence.json` and checked against it; a number
+#: hard-coded into a runtime string could not be, and would go stale exactly the
+#: way the sentence beside a correct span did. So this names each limitation and
+#: points at the document that carries its measurement.
+UNVALIDATED = (
+    "UNVALIDATED: this gate has never been measured against a real vehicle, "
+    "only against synthetic scenes."
+)
+
+#: The limitations, named. Each one is measured and published; see the presence
+#: section of README.md and docs/CONTRACT.md for the tables.
+KNOWN_LIMITS = (
+    "on smooth ground -- sealed or painted concrete, which is what many covered "
+    "entries have -- it does not separate a vehicle from an empty lane at all",
+    "in an open-air entry, moderate rain makes an EMPTY lane read as occupied "
+    "before the gate gives up and returns null; a metal plate on the loop is "
+    "admitted in that band",
+    "a bright enough headlight pool on the floor reads as occupied before the "
+    "car that cast it is in frame",
+    "no scene measured has produced `false` for a frame with a vehicle in it; "
+    "where it fails, it fails to null -- a ticket and a human",
+)
+
 
 #: Named equipment faults, reported rather than folded into the verdict. These
 #: are the reasons a lane operator has to be able to act on: every one of them
@@ -605,8 +647,10 @@ def _match_illumination(image, reference):
     if not np.isfinite(gain) or not np.isfinite(offset) or not low <= gain <= high:
         return None
     # Undo the fitted light on the CAPTURE, so the comparison happens in the
-    # reference's own exposure and `pixel_delta` keeps meaning grey levels of
-    # the reference.
+    # reference's own exposure. (This comment used to say the point was to keep
+    # `pixel_delta` meaning grey levels of the reference; `pixel_delta` was
+    # removed when the measure became structural, and the fit was kept for the
+    # other reason given above -- it is the guard on whether this is the lane.)
     corrected = (image.astype("float32") - offset) / gain
     return np.clip(corrected, 0, 255).astype("uint8")
 
