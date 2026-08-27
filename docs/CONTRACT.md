@@ -106,14 +106,15 @@ caller sending plate crops are all `null` — not because nothing is there, but
 because nobody can tell, and `null` is the value that means that.
 
 **`null` is not the only thing that happens when the gate loses the lane.** A
-scene disturbed enough — bright streaks covering the camera's view of the
-ground, a beam pool from a car that has not arrived — passes through a band
-where the gate reads an EMPTY lane as occupied and answers `true` before it
-gives up and answers `null`. That band is measured and published in the
-deployment section below, table by table, because `true` on an empty lane costs
-a ticket and an attendant. Whether it ever becomes a refusal is measured there
-too, and stated only there. It is not nothing, and it is not something a reader
-should have to discover.
+scene disturbed enough passes through a band where the gate reads an EMPTY lane
+as occupied and answers `true` before it gives up and answers `null`. **What
+counts as disturbed enough is not stated here.** Each condition is named,
+scoped and measured in the deployment section below, table by table, and stated
+only there — one wording of each, generated from the measurement, so this page
+cannot drift from it. That band matters because `true` on an empty lane costs a
+ticket and an attendant. Whether it ever becomes a refusal is measured there
+too. It is not nothing, and it is not something a reader should have to
+discover.
 
 Two invariants the record enforces, so you never have to check them:
 
@@ -414,7 +415,7 @@ This is a measured REGRESSION against the intensity measure that preceded it, wh
 <!--/mb-->
 
 <!--mb:presence.headlight-->
-**Headlights on the floor.** A covered entry is artificially lit and often dark, so an approaching car throws its beams into frame before the car itself arrives — a large change in the scene caused by a vehicle that is not yet the vehicle. Measured over 8 pools, with and without the car that cast them. `pool` is the beam's peak as a multiple of ambient ADDED to it, so the table states peak = 1 + pool.
+**Headlights on the floor.** A car with its beams on throws them into frame before the car itself arrives — a large change in the scene caused by a vehicle that is not yet the vehicle. Measured over 8 pools, with and without the car that cast them. `pool` is the beam's peak as a multiple of ambient ADDED to it, so the table states peak = 1 + pool.
 
 | beam pool, peak x ambient | empty lane (car not yet in frame) | vehicle |
 |---|---|---|

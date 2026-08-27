@@ -108,7 +108,14 @@ def _something_else(value):
     if isinstance(value, str):
         return value + " (perturbed)"
     if value is None:
-        return 0
+        # A tri-state perturbs into another STATE of the tri-state, never into
+        # a number. This returned `0`, and it survived only because `_verdict`
+        # swallowed whatever it was handed: `0` hash-equals `False`, so a
+        # perturbed `null` rendered as a confident `` `false` `` and the control
+        # went green on a value that is not a verdict at all. Asserting the type
+        # in `_verdict` turned that red immediately -- the assertion catching
+        # its own control before it ever had to catch the evidence.
+        return False
     if isinstance(value, list):
         return value[:-1] if len(value) > 1 else [*value, *value]
     if isinstance(value, dict):
@@ -168,7 +175,29 @@ VERDICT = {True: "`true`", False: "`false`", None: "`null`"}
 
 
 def _verdict(present) -> str:
-    return VERDICT.get(present, f"`{present}`")
+    """A verdict as a published table writes it, LOUDLY.
+
+    The type is asserted rather than the lookup being left to fail, and the
+    difference is the whole point. `VERDICT[present]` looks loud and is not:
+    `0`, `1`, `0.0` and `numpy.bool_` all hash-equal to `False` or `True`, so
+    every value that would realistically leak out of the evaluator comes back
+    as a CONFIDENT VERDICT with no error -- which is the silent wrong answer
+    this repo's standing acceptance exists to forbid, arriving through the one
+    door a bracket lookup cannot close. `numpy.bool_` is not a subclass of
+    `bool`, so `isinstance` catches it where `in VERDICT` does not.
+
+    An earlier form of this used `.get(present, f"`{present}`")` and rendered
+    an unexpected value straight into a published table. Loud-to-silent is a
+    regression on the day it is written, not on the day it fires.
+    """
+    if present is not None and not isinstance(present, bool):
+        raise TypeError(
+            f"presence verdict {present!r} is a {type(present).__name__}; only "
+            "True, False and None are verdicts. A numeric or numpy value here "
+            "would be published as a confident `true`/`false` by any lookup "
+            "that compares by equality."
+        )
+    return VERDICT[present]
 
 
 def _cell(verdict: dict) -> str:
@@ -504,11 +533,10 @@ def _headlight_table(evidence: dict) -> str:
     sweep = at(evidence, "headlight.sweep")
     units = at(evidence, "headlight.pool_units")
     lines = [
-        "**Headlights on the floor.** A covered entry is artificially lit and often "
-        "dark, so an approaching car throws its beams into frame before the car "
-        "itself arrives — a large change in the scene caused by a vehicle that is "
-        f"not yet the vehicle. Measured over {len(sweep)} pools, with and without "
-        f"the car that cast them. {units}",
+        "**Headlights on the floor.** A car with its beams on throws them into "
+        "frame before the car itself arrives — a large change in the scene caused "
+        f"by a vehicle that is not yet the vehicle. Measured over {len(sweep)} "
+        f"pools, with and without the car that cast them. {units}",
         "",
         "| beam pool, peak x ambient | empty lane (car not yet in frame) | vehicle |",
         "|---|---|---|",

@@ -38,6 +38,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from measured_figures import (  # noqa: E402
     BLOCKS,
     DOCUMENTS,
+    EVIDENCE,
+    VERDICT,
+    _verdict,
     at,
     blocks,
     cited,
@@ -498,3 +501,140 @@ def test_the_camera_fault_caveat_is_one_definition_at_both_seams():
     )
     assert "reference_not_recognised" in CAMERA_FAULTS_CAVEAT
     assert "camera_faults" in CAMERA_FAULTS_CAVEAT
+
+
+# --- one wording, and a check that does not match words ------------------
+
+
+def _tracked_text_files() -> list[Path]:
+    """Every tracked file, as paths. The corpus the scope check searches."""
+    import subprocess
+
+    listed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split("\0")
+    return [ROOT / name for name in listed if name]
+
+
+def _files_stating(text: str, paths) -> set[str]:
+    """Which of `paths` contain `text` verbatim, repo-relative."""
+    found = set()
+    for path in paths:
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if text in body:
+            found.add(path.relative_to(ROOT).as_posix())
+    return found
+
+
+@guarantee
+def test_the_streak_scope_is_stated_in_exactly_one_place():
+    """D1b. The weather scope's wording exists once and is GENERATED everywhere.
+
+    Structural, not lexical, and the difference is the reason this test is
+    shaped the way it is. The obvious check -- "does any file state the streak
+    scope outside a generated marker" -- can only be written as a substring
+    match on words a reader chose, which is the check this project has already
+    watched fail: every disclosure keyword in the seam check was a verbatim
+    substring of the disclosure it came from, and a new limitation could borrow
+    an unrelated sentence's phrase with both guards green. It would also need an
+    allowlist for the comment in `presence.py` that quotes the two REPLACED
+    wordings as history, and for the docstring that names the constant -- and an
+    allowlist is exactly how `KNOWN_LIMITS[0]`'s population claim survived the
+    6a sweep.
+
+    So the check keys on the CONSTANT'S OWN TEXT and asks where it occurs. Both
+    sides derive from the source of truth: the corpus is `git ls-files`, so a
+    new file cannot escape by not being on a list, and the permitted set is
+    `DOCUMENTS` plus `EVIDENCE` -- the exact surfaces `--update-docs` writes --
+    so adding a generated surface updates this test by construction.
+
+    Sites that REFER to the scope by name (`presence.py` interpolating it into
+    `KNOWN_LIMITS`, `eval_presence.py` into the evidence `topic`,
+    `measured_figures.py` into the block, the docstring pointing at it) are
+    invisible here and should be: referring to the one definition is the
+    behaviour being enforced, not the behaviour being caught.
+    """
+    from vehicle_id.presence import STREAK_CONDITION
+
+    tracked = _tracked_text_files()
+    allowed = {path.as_posix() for path in DOCUMENTS} | {EVIDENCE.as_posix()}
+    stating = _files_stating(STREAK_CONDITION, tracked)
+
+    assert stating <= allowed, (
+        "the weather scope is written out in a file nothing generates:\n  "
+        + "\n  ".join(sorted(stating - allowed))
+        + "\n\nA second copy drifts, and the hand-written one is the one that "
+        "lies -- this wording already existed in four places and a round that "
+        "corrected one left three standing. State it by interpolating "
+        "`presence.STREAK_CONDITION`, or say nothing about scope and point at "
+        "the generated block that does."
+    )
+
+    # Planted positive control, INSIDE the repo so it goes through the same
+    # `relative_to(ROOT)` path the real hits do. Without it this test passes
+    # just as happily when `_files_stating` reads nothing at all -- an absence
+    # claim about a search, with no control, is the failure mode this repo has
+    # published four times.
+    planted = ROOT / "_streak_scope_control.md"
+    planted.write_text(f"states the scope itself: {STREAK_CONDITION}.", "utf-8")
+    try:
+        caught = _files_stating(STREAK_CONDITION, [*tracked, planted])
+    finally:
+        planted.unlink()
+    assert caught == stating | {planted.name}, (
+        "the finder did not see a file that plainly states the scope, so its "
+        f"silence about the tracked files means nothing (saw {sorted(caught)})"
+    )
+
+
+@guarantee
+def test_a_value_that_is_not_a_verdict_is_loud():
+    """D3/E5. The published-table lookup fails noisily, and it is PROVEN to.
+
+    This exists because the obvious restoration does not work. `_verdict` had
+    become `VERDICT.get(present, f"`{present}`")`, which renders an unexpected
+    value straight into a published table -- loud to silent, a regression on the
+    day it is written under a standing acceptance of never wrong silently. The
+    natural fix is to put the bracket lookup back. **That is a check that cannot
+    fail for the failure it guards:** `0`, `1`, `0.0` and every numpy scalar
+    hash-equal to `False` or `True`, so `VERDICT[np.int64(0)]` returns
+    `` `false` `` with no error at all. A numeric or numpy `present` leaking out
+    of the evaluator -- the realistic way this breaks -- would have been
+    published as a confident verdict by the "loud" version.
+
+    So the TYPE is asserted, not the membership, and this test names the values
+    that distinguish the two. Every one of them passes a bracket lookup.
+    """
+    assert _verdict(True) == "`true`"
+    assert _verdict(False) == "`false`"
+    assert _verdict(None) == "`null`"
+
+    # The values that make the difference: a bracket lookup returns a CONFIDENT
+    # VERDICT for every one of them, because they hash-equal True or False.
+    slips_through = [0, 1, 0.0, 1.0]
+    try:  # numpy is an `engine` dependency; the no-engine job has none.
+        import numpy as np
+
+        slips_through += [np.True_, np.False_, np.int64(0), np.int64(1), np.float64(0.0)]
+    except ImportError:
+        pass
+
+    for value in slips_through:
+        assert value in VERDICT, (
+            f"{value!r} no longer hash-equals a verdict, so it would raise "
+            "KeyError on its own and this list has stopped demonstrating why "
+            "the TYPE is asserted rather than the membership"
+        )
+        with pytest.raises(TypeError):
+            _verdict(value)
+
+    # And the ones a bracket lookup would have caught anyway are still caught,
+    # with a type error rather than a KeyError from three frames down.
+    for value in ("true", "none", (), 2):
+        assert value not in VERDICT
+        with pytest.raises(TypeError):
+            _verdict(value)

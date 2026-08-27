@@ -329,10 +329,9 @@ def test_the_metal_plate_is_admitted_in_moderate_weather(detector):
 def test_a_headlight_pool_never_refuses_the_car_that_cast_it(pool):
     """M3's axis, and the safety property on it.
 
-    A covered entry is artificially lit and often dark, so an approaching car
-    throws its beams onto the floor BEFORE it is in frame: a large change in the
-    scene caused by a vehicle that is not yet the vehicle. Nothing had measured
-    what this gate makes of that.
+    A car with its beams on throws them onto the floor BEFORE it is in frame: a
+    large change in the scene caused by a vehicle that is not yet the vehicle.
+    Nothing had measured what this gate makes of that.
 
     What must hold at every pool is what must hold everywhere -- the car that is
     actually there is never refused. What the pool DOES cost is asserted
@@ -608,8 +607,8 @@ def test_the_matrix_covers_both_sides_of_every_axis():
         "the object's own surface grain is not varied"
     )
     assert 0.0 in headlights and any(h > 0 for h in headlights), (
-        "the beams are never on; a covered entry is artificially lit and an "
-        "approaching car throws a pool into frame before it arrives"
+        "the beams are never on; a car with its beams on throws a pool into "
+        "frame before it arrives"
     )
     assert len(cells) == (
         len(contrasts) * len(textures) * len(surfaces) * len(headlights)

@@ -133,9 +133,15 @@ def lane(
     the camera. Wound to zero, `texture` can express a floor the measure cannot
     serve; welded on, it could not.
 
-    `headlight` is the peak of a beam pool on the floor, as a multiple of the
-    ambient light there. A covered entry is artificially lit and often dark, and
-    an approaching car throws its beams into frame BEFORE the car itself
+    `headlight` is the peak of a beam pool on the floor, as a MULTIPLE of the
+    ambient light there -- so the axis is scale-free and carries no claim about
+    how bright or dark a real entry is. That matters: this parameter used to be
+    justified by "a covered entry is artificially lit and often dark", an
+    unmeasured frequency about real garages, and a fixture is part of the
+    measurement. Deleting the sentence moves no number here, because `_beam`
+    multiplies rather than adds and the axis never read the claim.
+
+    A car with its beams on throws them into frame BEFORE the car itself
     arrives -- a large scene change caused by a vehicle that is not yet the
     vehicle. See `_beam` for what the model does and does not include.
     """
@@ -298,9 +304,9 @@ def dead_sensor(fraction: float = 0.45, seed: int = 7):
 #
 # `contrast`, `texture` and `surface` are the three the old fixture could not
 # express at all. `headlight` and `grain` are the two the round after that
-# could not: one because a covered entry is lit artificially and nothing
-# modelled it, one because it was welded to `texture` and so an axis could not
-# reach the branch it existed to test.
+# could not: one because a beam pool on the floor was not modelled at all, one
+# because it was welded to `texture` and so an axis could not reach the branch
+# it existed to test.
 
 #: Swept through 1.0 from both sides. 1.0 is the object at exactly the ground's
 #: luminance; 0.78 and 1.22 sit inside the +/-30-grey-level band that the
@@ -318,7 +324,8 @@ SURFACES = (0.0, 0.02)
 #: Beams off, and a pool at twice the ambient light on the floor. The sweep that
 #: finds where a pool stops being tolerated is `headlight_sweep()`; this axis is
 #: here so that every other cell of the matrix is measured with the lights on as
-#: well as off, which is the state a covered entry is actually in.
+#: well as off. BOTH states are swept, so the matrix asserts nothing about which
+#: one a real entry is in -- it does not need to, and it used to say it did.
 HEADLIGHTS = (0.0, 2.0)
 
 #: Comfortably above the 15% floor and below the 90% ceiling, so that the

@@ -339,7 +339,7 @@ This is a measured REGRESSION against the intensity measure that preceded it, wh
 <!--/mb-->
 
 <!--mb:presence.headlight-->
-**Headlights on the floor.** A covered entry is artificially lit and often dark, so an approaching car throws its beams into frame before the car itself arrives — a large change in the scene caused by a vehicle that is not yet the vehicle. Measured over 8 pools, with and without the car that cast them. `pool` is the beam's peak as a multiple of ambient ADDED to it, so the table states peak = 1 + pool.
+**Headlights on the floor.** A car with its beams on throws them into frame before the car itself arrives — a large change in the scene caused by a vehicle that is not yet the vehicle. Measured over 8 pools, with and without the car that cast them. `pool` is the beam's peak as a multiple of ambient ADDED to it, so the table states peak = 1 + pool.
 
 | beam pool, peak x ambient | empty lane (car not yet in frame) | vehicle |
 |---|---|---|
