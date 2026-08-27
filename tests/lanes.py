@@ -214,9 +214,9 @@ def smooth_floor(level: float = 120, seed: int = 3):
     can, because it carries almost no grain -- and a smooth sealed floor under a
     good sensor really is that scene.
 
-    Per M2: if most garage entries are covered, this is not an exotic case. It
-    is what the ground at a covered entry may well look like, and the honest
-    answer for it is NOT MEASURED.
+    Per M2: this is ground a covered entry can have, and the honest answer for
+    it is NOT MEASURED. How often it occurs is a second measurement nobody has
+    made, and none is claimed.
     """
     plain = np.full((H, W), float(level), np.float32)
     plain += np.linspace(-6, 6, H, dtype=np.float32)[:, None]

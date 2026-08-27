@@ -51,9 +51,11 @@ The presence gate does not separate a vehicle from an empty lane on ground that
 carries no texture of its own, and it says so with a number: below
 `DEFAULT_MIN_REFERENCE_TEXTURE` grey levels of typical local texture it declines
 to answer at all. Every figure published about that lives on a `texture` axis of
-a synthetic fixture, and the open question — the module's central one, now that
-most garage entries are known to be covered and therefore likely sealed or
-painted concrete — is what a REAL floor measures on the same scale.
+a synthetic fixture, and the open question — the module's central one — is what
+a REAL floor measures on the same scale. Whether the gate can serve a given entry
+is a property of THAT entry's ground, which is what this mapping exists to
+settle, one floor at a time. How many entries have ground like it is measured
+nowhere and is claimed nowhere.
 
 **The mapping is defined here, before the first photograph is taken, and
 deliberately so.** A photograph scored after the fact, against a scale chosen

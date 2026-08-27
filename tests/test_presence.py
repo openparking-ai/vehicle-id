@@ -303,8 +303,9 @@ def test_the_metal_plate_is_admitted_in_moderate_weather(detector):
 
     This is asserted rather than merely documented because it is the thing a
     garage operator is buying, and a regression back into silence about it
-    should turn the suite red. It applies to open-air entries; most garage
-    entries are covered, and how many are not is NOT MEASURED.
+    should turn the suite red. Whether it reaches a given entry depends on
+    whether rain falls in that camera's view -- a per-site condition, not a
+    frequency: how many entries are open to it is NOT MEASURED.
     """
     plate = vehicle(80, 40, seed=7, contrast=2.05)
     dry = detector.measure([plate])
@@ -681,11 +682,11 @@ def test_ground_with_no_texture_is_not_measured_rather_than_guessed():
     and must not page anybody.
 
     The scene now lives in `lanes.py` rather than in this function, because the
-    evidence file has to measure the same picture the guarantee does. And it
-    matters more than it used to: most garage entries are covered, and a covered
-    entry is typically sealed or painted concrete rather than open asphalt.
-    Whether a real one carries enough texture is NOT MEASURED and is the
-    module's central open question.
+    evidence file has to measure the same picture the guarantee does. Sealed or
+    painted concrete is ground a covered entry can have; whether a real one
+    carries enough texture is NOT MEASURED and is the module's central open
+    question. How many entries stand on ground like it is a second measurement
+    nobody has made, and no figure for it is claimed anywhere.
     """
     result = PresenceDetector(reference=smooth_floor()).measure([smooth_floor()])
     assert result.present is None

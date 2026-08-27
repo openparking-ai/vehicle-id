@@ -384,9 +384,9 @@ It does **not** separate in ground texture 0.25, headlight pool x3: 14 of 18 emp
 
 The matrix's own ground never gets near that floor — its texture axis bottoms out at 3.821 grey levels (texture 0.25 → 3.821, texture 1 → 9.194, texture 2 → 17.46), because the sensor's own grain is most of it.
 
-Sealed or painted concrete under a clean sensor is a different scene: it measures 0.67 grey levels, the gate returns `none` with no camera fault raised, and it says why — "the reference view's local texture is 0.67 grey levels, below 1.5; this ground carries nothing for a structural comparison to recognise".
+Sealed or painted concrete under a clean sensor is a different scene: it measures 0.67 grey levels, the gate returns `null` with no camera fault raised, and it says why — "the reference view's local texture is 0.67 grey levels, below 1.5; this ground carries nothing for a structural comparison to recognise".
 
-**This matters more than the number suggests.** 0.67 grey levels against a 1.5 floor is not an exotic scene: most garage entries are covered, and a covered entry is typically sealed or painted concrete rather than open asphalt — smoother, less grain, fewer markings. The failing case may well be the common one. NOT MEASURED on any real frame (0 have ever been through this gate), so how much texture a real covered entry carries is an open question, and the remedy if it carries too little is physical — paint markings, add a textured strip in view.
+**This matters more than the number suggests.** 0.67 grey levels against a 1.5 floor is a surface this gate declines to answer on at all. **Whether that describes a given entry is a property of that entry** — the operator can photograph its floor and score it by the mapping in `docs/EVAL_DATA.md`; how many entries look like it is not something this project has measured. NOT MEASURED on any real frame (0 have ever been through this gate), so how much texture a real covered entry carries is an open question, and the remedy if it carries too little is physical — paint markings, add a textured strip in view.
 <!--/mb-->
 
 <!--mb:presence.weather-->
@@ -409,7 +409,7 @@ The band from 10% is the one to read. `presence: true` with `outcome: "fallback"
 
 **And the fraud is admitted with it.** The metal plate on the loop — the case this gate exists for — is correctly refused up to 5% coverage and then **transacts from 10%**, on the same streaks. In that band the gate does not merely lose the ability to say `false`; it issues the ticket for the exact scene it was built to refuse.
 
-This is a measured REGRESSION against the intensity measure that preceded it, which called heavy rain an empty lane correctly. It is recorded rather than argued away. **It applies to open-air entries** — most garage entries are covered, and rain is not in a covered camera's view. NOT MEASURED on any real frame (0 have ever been through this gate), so how many are open is not known either. Across the sweep, 0 of 8 vehicle scenes were refused.
+This is a measured REGRESSION against the intensity measure that preceded it, which called heavy rain an empty lane correctly. It is recorded rather than argued away. **Whether it reaches a given entry depends on whether rain falls in that camera's view** — which the operator can see and this project cannot count. NOT MEASURED on any real frame (0 have ever been through this gate), and no frequency is claimed either way. Across the sweep, 0 of 8 vehicle scenes were refused.
 <!--/mb-->
 
 <!--mb:presence.headlight-->
@@ -447,7 +447,7 @@ Every one of those 124 scenes is a drawn rectangle on a drawn lane — NOT MEASU
 
 It is published under `camera_faults` in `GET /v1/health`. That is right for 1 of the 4 — a capture that is not a view of this lane — and wrong for the other 3, where nothing is broken. **Do not read this reason as a confirmed equipment fault** — read it as "the capture no longer matches the reference, for one of several reasons this build cannot separate". Separating them needs a measurement this release does not make, and inventing one would be guessing; naming the conflation is the honest thing available now.
 
-**One of those conditions is a car arriving.** 2 of the 108 separation-matrix cells put an ordinary vehicle — 44% of the frame, not one filling it — in front of the camera and got `reference_not_recognised` back: ground texture 0.25, headlight pool x3, at contrast 2.05 and surface grain 0. The gate counts that under `camera_faults`, so an arriving car pages a technician about a working camera. NOT MEASURED on any real frame (0 have ever been through this gate): how often a real covered entry lands in this configuration is not known, and these are drawn rectangles. What is known is that the reason cannot be read as equipment on its own.
+**One of those conditions is a car arriving.** 2 of the 108 separation-matrix cells put an ordinary vehicle — 44% of the frame, not one filling it — in front of the camera and got `reference_not_recognised` back. Each of those cells, in full: ground texture 0.25, headlight pool x3 — contrast 2.05 / surface grain 0, contrast 2.05 / surface grain 0.02. The gate counts that under `camera_faults`, so an arriving car pages a technician about a working camera. NOT MEASURED on any real frame (0 have ever been through this gate): how often a real entry lands in one of these configurations is not known, and these are drawn rectangles. What is known is that the reason cannot be read as equipment on its own.
 <!--/mb-->
 
 ---
