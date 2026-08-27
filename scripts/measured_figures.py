@@ -1,4 +1,4 @@
-"""The figures and the SECTIONS the documents are allowed to state, rendered
+"""The figures and the SENTENCES the documents are allowed to state, rendered
 from the evidence.
 
 One place turns a measurement into the words that appear in a document. There
@@ -20,24 +20,42 @@ were false -- the gate reads an empty lane as OCCUPIED from 10% to 25% coverage
 and the evidence file said so. A true number lent its credibility to a false
 sentence, in both published documents, and nothing could see it.
 
-A check that a document makes no behavioural claim outside a span would have to
-recognise a natural-language assertion, which is a classifier and not a check.
-So the sentences are generated instead: any section describing MEASURED
-BEHAVIOUR is rendered here from the evidence, and the document holds only the
-markers. There is then no hand-written prose in those sections to go stale, and
-the false sentence could not have been written.
+**Claims, and this is the third mechanism, because the second was not enough
+either.** Generating the sections moved the prose out of the document and into
+this file; it did not stop it being hand-written. `_safety_block` computed
+`refusals` from the evidence and then followed it with a fixed string -- "no
+scene measured produced it for a frame with a vehicle in it" -- so planting
+three refusals rendered "3 wrongful refusals ... and no scene measured produced
+it", and nothing went red, because the check compares the DOCUMENT to the
+RENDERER and both carried the contradiction. That is K2's failure reproduced
+inside the mechanism built to prevent it, on the one claim that makes this gate
+shippable off by default.
 
-Outside those sections the rule is a MANUAL convention, named as one rather than
-disguised as a control: prose makes no behavioural claim of its own, and L3
-checks it. Blocks render at column 0 and are not indented into list items or
-blockquotes -- a generated section that had to be re-wrapped by hand would be
-hand-written again.
+So a block is no longer a function that returns a string. **A block is a
+sequence of `Claim`s, and a `Claim` cannot emit a sentence without a value
+deciding what the sentence says.** Each one declares the evidence paths it
+reads, and `tests/test_measured_docs.py` perturbs every declared path of every
+claim and requires the prose to change. A claim that declares no reads is
+rejected; a claim whose sentence survives its own evidence changing is rejected.
+Neither of those is a convention -- recognising a natural-language assertion
+would be a classifier, but requiring that a sentence be a function of a named
+value is a check.
+
+Outside these sections the rule is still a MANUAL convention, named as one
+rather than disguised as a control: prose makes no behavioural claim of its own,
+and L3 checks it. Blocks render at column 0 and are not indented into list items
+or blockquotes -- a generated section that had to be re-wrapped by hand would be
+hand-written again. When a bullet or a blockquote needs to make a measured
+claim, the claim MOVES INTO a block and the bullet keeps a pointer to it.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 EVIDENCE = Path("docs/measured/presence.json")
@@ -53,8 +71,74 @@ BLOCK = re.compile(
 )
 
 #: Documents that cite measurements. Anything with a span or a block must be
-#: listed here, or nothing would check it.
-DOCUMENTS = (Path("README.md"), Path("docs/CONTRACT.md"))
+#: listed here, or nothing would check it. `EVAL_DATA.md` is here because it
+#: cites the fixture's own lowest reference texture, and a measured figure in a
+#: document nothing checks is the original defect in a quieter place.
+DOCUMENTS = (Path("README.md"), Path("docs/CONTRACT.md"), Path("docs/EVAL_DATA.md"))
+
+
+# --- reading and perturbing the evidence ---------------------------------
+
+
+def at(evidence: dict, path: str):
+    """The value at a dotted path. The only way a claim reads the evidence."""
+    node = evidence
+    for part in path.split("."):
+        node = node[part]
+    return node
+
+
+def _something_else(value):
+    """A different value of the same shape.
+
+    Used only by the control: the point is to change what a claim reads without
+    changing what it can read, so that a sentence which does not move when its
+    own evidence moves can be seen not to move.
+    """
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return value + 1
+    if isinstance(value, str):
+        return value + " (perturbed)"
+    if value is None:
+        return 0
+    if isinstance(value, list):
+        return value[:-1] if len(value) > 1 else [*value, *value]
+    if isinstance(value, dict):
+        if len(value) > 1:
+            dropped = next(iter(value))
+            return {k: v for k, v in value.items() if k != dropped}
+        return {**value, "perturbed": next(iter(value.values()), 0)}
+    return value
+
+
+def perturbed(evidence: dict, path: str) -> dict:
+    """The evidence with exactly one value replaced by a different one."""
+    parts = path.split(".")
+    out = copy.deepcopy(evidence)
+    node = out
+    for part in parts[:-1]:
+        node = node[part]
+    node[parts[-1]] = _something_else(node[parts[-1]])
+    return out
+
+
+@dataclass(frozen=True)
+class Claim:
+    """One paragraph a document is allowed to state, and what it is derived from.
+
+    `reads` is not documentation. It is the control's handle: every path listed
+    is perturbed in turn and `say` must produce different words. A claim with an
+    empty `reads` cannot be checked and is rejected outright -- that is the rule
+    that stops a fixed string reappearing in a template.
+
+    `say` returns "" when the evidence does not support making the claim at all,
+    which is how a section drops a paragraph rather than stating it falsely.
+    """
+
+    reads: tuple[str, ...]
+    say: Callable[[dict], str]
 
 
 def _rate(block: dict, reads: int, seeds: int) -> str:
@@ -79,6 +163,14 @@ def _cell(verdict: dict) -> str:
     return f"{word} {verdict['occupancy']:.3f}"
 
 
+def _synthetic(evidence: dict) -> str:
+    """How the caveat reads, from the count of real frames ever measured."""
+    real = at(evidence, "scenes.real_frames_measured")
+    if real:
+        return f"MEASURED on {real} real frames"
+    return "NOT MEASURED on any real frame (0 have ever been through this gate)"
+
+
 def figures(evidence: dict) -> dict[str, str]:
     """Every single VALUE a document may state, keyed by the name it cites."""
     out: dict[str, str] = {}
@@ -94,6 +186,11 @@ def figures(evidence: dict) -> dict[str, str]:
     sep = evidence["separation"]
     out["separation.cells"] = str(sum(row["cells"] for row in sep.values()))
     out["separation.refusals"] = str(sum(row["vehicle_refused"] for row in sep.values()))
+
+    floor = evidence["texture_floor"]
+    axis = floor["matrix_ground_reference_texture"]
+    out["texture_floor.matrix_lowest"] = str(min(axis.values()))
+    out["texture_floor.smooth_floor"] = str(floor["smooth_floor_reference_texture"])
 
     noise_block = evidence.get("noise") or {}
     out["noise.weights"] = noise_block.get("weights_id", "AN UNRECORDED ARTEFACT")
@@ -123,91 +220,195 @@ def figures(evidence: dict) -> dict[str, str]:
     return out
 
 
-# --- the generated sections ----------------------------------------------
+# --- the generated sections, claim by claim ------------------------------
+#
+# Every function below takes the whole evidence and returns one paragraph. None
+# of them may state anything a value in `Claim.reads` does not decide.
 
 
-def _separation_block(evidence: dict) -> str:
+def _rows(evidence: dict):
     sep = evidence["separation"]
-    rows = sorted(sep.items(), key=lambda kv: (kv[1]["texture"], kv[1]["headlight"]))
-    total = sum(row["cells"] for _, row in rows)
-    working = [label for label, row in rows if row["separates"]]
-    failing = [label for label, row in rows if not row["separates"]]
-    margins = [row["margin"] for _, row in rows if row["separates"]]
+    return sorted(sep.items(), key=lambda kv: (kv[1]["texture"], kv[1]["headlight"]))
 
-    lines = [
+
+def _separation_intro(evidence: dict) -> str:
+    rows = _rows(evidence)
+    total = sum(row["cells"] for _, row in rows)
+    return (
         f"**The matrix, unedited.** {total} cells sweeping vehicle/ground contrast "
         "through the exactly-invisible case, ground texture, the vehicle's own "
         "surface grain, and a headlight pool on the floor. Each cell carries both "
         "scenes — the vehicle and the empty lane beside it — because a measure that "
-        "answered one way for everything would pass a one-sided sweep perfectly.",
-        "",
-        "| configuration | cells | vehicle seen | vehicle refused | empty called empty "
-        "| empty read occupied | margin | separates |",
-        "|---|---|---|---|---|---|---|---|",
+        "answered one way for everything would pass a one-sided sweep perfectly."
+    )
+
+
+def _separation_table(evidence: dict) -> str:
+    lines = [
+        "| configuration | cells | vehicle seen | vehicle refused | vehicle not measured "
+        "| empty called empty | empty read occupied | margin | separates |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
-    for label, row in rows:
+    for label, row in _rows(evidence):
         margin = "—" if row["margin"] is None else f"{row['margin']:.3f}"
         lines.append(
             f"| {label} | {row['cells']} | {row['vehicle_seen']} | {row['vehicle_refused']} "
-            f"| {row['empty_called_empty']} | {row['empty_false_positive']} | {margin} "
+            f"| {row['vehicle_not_measured']} | {row['empty_called_empty']} "
+            f"| {row['empty_false_positive']} | {margin} "
             f"| {'yes' if row['separates'] else '**no**'} |"
-        )
-    lines.append("")
-    if working:
-        lines.append(
-            f"It separates vehicle from empty in {len(working)} of {len(rows)} "
-            f"configurations, with a worst-case occupancy margin of {min(margins):.2f}."
-        )
-    if failing:
-        lines.append(
-            f"It does **not** separate in: {'; '.join(failing)}. "
-            "In those rows an empty lane reads as occupied, so the gate gives you "
-            "nothing there — including no protection against the metal-plate case it "
-            "exists for."
         )
     return "\n".join(lines)
 
 
-def _texture_block(evidence: dict) -> str:
-    floor = evidence["texture_floor"]
-    axis = floor["matrix_ground_reference_texture"]
-    lowest = min(axis.values())
-    return "\n".join(
-        [
-            "**Ground with no texture of its own is NOT MEASURED, never `false`.** The "
-            "comparison asks whether a window still looks like the same piece of "
-            f"ground, so ground carrying nothing to recognise leaves it nothing to "
-            f"work with. Below {floor['min_reference_texture']} grey levels of typical "
-            "local texture the gate declines to answer and says why.",
-            "",
-            f"The matrix's own ground never gets near that floor — its texture axis "
-            f"bottoms out at {lowest} grey levels ("
-            + ", ".join(f"{k} → {v}" for k, v in sorted(axis.items()))
-            + "), because the sensor's own grain is most of it. Sealed or painted "
-            "concrete under a clean sensor is a different scene: it measures "
-            f"{floor['smooth_floor_reference_texture']} grey levels and the gate "
-            f"returns `{str(floor['smooth_floor']['present']).lower()}`, with no camera "
-            "fault raised — nothing is broken, this ground is simply not one this "
-            "measure can serve.",
-            "",
-            "**This matters more than the number suggests.** Most garage entries are "
-            "covered, and a covered entry is typically sealed or painted concrete "
-            "rather than open asphalt — smoother, less grain, fewer markings. The "
-            "failing case may well be the common one. **NOT MEASURED**: no real floor "
-            "has been photographed, so how much texture a real covered entry carries "
-            "is an open question, and the remedy if it carries too little is physical "
-            "— paint markings, add a textured strip in view.",
-        ]
+def _why_a_row_fails(row: dict) -> str:
+    """The reason THIS row does not separate, from the row.
+
+    `separates` is false on any of three conditions and the old sentence
+    asserted one of them for every failing row, so a row failing because
+    VEHICLES WERE REFUSED read as "an empty lane reads as occupied" — the
+    safety failure narrated away as a nuisance one.
+    """
+    reasons = []
+    if row["vehicle_refused"]:
+        reasons.append(f"{row['vehicle_refused']} of {row['cells']} vehicles were REFUSED")
+    if row["empty_false_positive"]:
+        reasons.append(
+            f"{row['empty_false_positive']} of {row['cells']} empty lanes read as occupied"
+        )
+    if row["margin"] is None:
+        reasons.append("no cell in it produced two comparable occupancies")
+    elif row["margin"] <= 0:
+        reasons.append(f"the occupancy margin is {row['margin']:.3f}, not positive")
+    return " and ".join(reasons)
+
+
+def _separation_summary(evidence: dict) -> str:
+    rows = _rows(evidence)
+    working = [row["margin"] for _, row in rows if row["separates"]]
+    failing = [(label, row) for label, row in rows if not row["separates"]]
+    lines = []
+    if working:
+        lines.append(
+            f"It separates vehicle from empty in {len(working)} of {len(rows)} "
+            f"configurations, with a worst-case occupancy margin of {min(working):.2f}."
+        )
+    else:
+        lines.append(
+            f"It separates vehicle from empty in NONE of the {len(rows)} configurations."
+        )
+    for label, row in failing:
+        lines.append(f"It does **not** separate in {label}: {_why_a_row_fails(row)}.")
+    return "\n".join(lines)
+
+
+def _separation_admissions(evidence: dict) -> str:
+    """What the matrix says about admitting a vehicle — the claim moved here.
+
+    `docs/CONTRACT.md` used to say, in a bullet nothing checked, that the gate
+    admits a lane with a vehicle in it at EVERY contrast tested. The evidence
+    file said `vehicle_seen: 16` against `cells: 18` in one row. The claim now
+    lives where the numbers that decide it live, and the bullet points here.
+    """
+    rows = _rows(evidence)
+    cells = sum(row["cells"] for _, row in rows)
+    seen = sum(row["vehicle_seen"] for _, row in rows)
+    refused = sum(row["vehicle_refused"] for _, row in rows)
+    unmeasured = sum(row["vehicle_not_measured"] for _, row in rows)
+    if seen == cells:
+        return (
+            f"**A vehicle is admitted in every one of the {cells} cells**, including "
+            "at the ground's exact luminance, where the vehicle and the ground it "
+            "stands on are the same brightness."
+        )
+    health: dict[str, int] = {}
+    for _, row in rows:
+        for reason, count in row["vehicle_not_measured_health"].items():
+            health[reason] = health.get(reason, 0) + count
+    named = ", ".join(f"`{reason}` in {count}" for reason, count in sorted(health.items()))
+    refusal = (
+        f"It is REFUSED in {refused} — `false` for a frame with a car in it."
+        if refused
+        else "None of them was refused."
+    )
+    return (
+        f"**A vehicle is admitted in {seen} of the {cells} cells**, including at the "
+        "ground's exact luminance, where the vehicle and the ground it stands on are "
+        f"the same brightness. {refusal} In the remaining {unmeasured} presence is "
+        f"`null` and the gate reports a camera fault: {named}. A cell that is not "
+        "measured is not a refusal — the lane falls back to a ticket and a human — "
+        "but it is a frame with a car in it that this gate answered nothing about, "
+        "and the reason it gave names equipment."
     )
 
 
-def _weather_block(evidence: dict) -> str:
-    weather = evidence["weather"]
-    sweep = weather["sweep"]
+def _texture_headline(evidence: dict) -> str:
+    floor = at(evidence, "texture_floor.min_reference_texture")
+    return (
+        "**Ground with no texture of its own is NOT MEASURED, never `false`.** The "
+        "comparison asks whether a window still looks like the same piece of ground, "
+        f"so ground carrying nothing to recognise leaves it nothing to work with. "
+        f"Below {floor} grey levels of typical local texture the gate declines to "
+        "answer."
+    )
+
+
+def _texture_axis(evidence: dict) -> str:
+    axis = at(evidence, "texture_floor.matrix_ground_reference_texture")
+    reaches = at(evidence, "texture_floor.matrix_axis_can_reach_the_floor")
+    listing = ", ".join(f"{k} → {v}" for k, v in sorted(axis.items()))
+    if reaches:
+        return (
+            f"The matrix's own ground reaches under that floor at its lowest setting "
+            f"({listing})."
+        )
+    return (
+        f"The matrix's own ground never gets near that floor — its texture axis "
+        f"bottoms out at {min(axis.values())} grey levels ({listing}), because the "
+        "sensor's own grain is most of it."
+    )
+
+
+def _texture_smooth_floor(evidence: dict) -> str:
+    texture = at(evidence, "texture_floor.smooth_floor_reference_texture")
+    present = at(evidence, "texture_floor.smooth_floor.present")
+    health = at(evidence, "texture_floor.smooth_floor.camera_health")
+    reason = at(evidence, "texture_floor.smooth_floor_reason")
+    fault = (
+        "with no camera fault raised"
+        if health is None
+        else f"and raises the camera fault `{health}`"
+    )
+    return (
+        "Sealed or painted concrete under a clean sensor is a different scene: it "
+        f"measures {texture} grey levels, the gate returns "
+        f"`{str(present).lower()}` {fault}, and it says why — "
+        f'"{reason}".'
+    )
+
+
+def _texture_consequence(evidence: dict) -> str:
+    texture = at(evidence, "texture_floor.smooth_floor_reference_texture")
+    floor = at(evidence, "texture_floor.min_reference_texture")
+    real = _synthetic(evidence)
+    if texture >= floor:
+        return ""
+    return (
+        f"**This matters more than the number suggests.** {texture} grey levels "
+        f"against a {floor} floor is not an exotic scene: most garage entries are "
+        "covered, and a covered entry is typically sealed or painted concrete rather "
+        "than open asphalt — smoother, less grain, fewer markings. The failing case "
+        f"may well be the common one. {real}, so how much texture a real covered "
+        "entry carries is an open question, and the remedy if it carries too little "
+        "is physical — paint markings, add a textured strip in view."
+    )
+
+
+def _weather_table(evidence: dict) -> str:
+    sweep = at(evidence, "weather.sweep")
     lines = [
         "**Weather, measured on three scenes at every coverage** — an empty lane, a "
         "vehicle, and the metal plate the gate exists to refuse. The number beside "
-        "each verdict is the measured occupancy.",
+        f"each verdict is the measured occupancy, over {len(sweep)} coverages.",
         "",
         "| streak coverage | empty lane | vehicle | metal plate |",
         "|---|---|---|---|",
@@ -217,62 +418,80 @@ def _weather_block(evidence: dict) -> str:
             f"| {row['coverage']:.0%} | {_cell(row['empty_lane'])} "
             f"| {_cell(row['vehicle'])} | {_cell(row['metal_plate'])} |"
         )
-    lines.append("")
-
-    answered = weather["highest_coverage_still_answered_false"]
-    occupied = weather["lowest_coverage_reading_occupied"]
-    declines = weather["lowest_coverage_declining_to_answer"]
-    admitted = weather["metal_plate_admitted_from"]
-
-    if occupied is None:
-        lines.append(
-            f"Two bands: `false` up to {_pct(answered)} of the frame in streaks, and "
-            f"`null` from {_pct(declines)}."
-        )
-    else:
-        lines.append(
-            f"**Three bands, not two.** `false` up to {_pct(answered)} of the frame in "
-            f"streaks; from {_pct(occupied)} an **empty lane reads as OCCUPIED**, at up "
-            f"to {max(r['empty_lane']['confidence'] or 0 for r in sweep):.2f} confidence; "
-            f"from {_pct(declines)} the gate declines to answer at all."
-        )
-        lines.append("")
-        lines.append(
-            "The middle band is the one to read. `presence: true` with "
-            "`outcome: \"fallback\"` tells a lane controller that a car is there and "
-            "could not be identified, and this contract says refusing it is a bug in "
-            "your integration — so in that band a conforming lane issues a ticket and "
-            "raises an attendant for a car that is not there."
-        )
-    if admitted is not None:
-        lines.append("")
-        lines.append(
-            f"**And the fraud is admitted with it.** The metal plate on the loop — the "
-            f"case this gate exists for — is correctly refused up to {_pct(answered)} "
-            f"coverage and then **transacts from {_pct(admitted)}**, on the same "
-            "streaks. In that band the gate does not merely lose the ability to say "
-            "`false`; it issues the ticket for the exact scene it was built to refuse."
-        )
-    lines.append("")
-    lines.append(
-        f"This is a measured REGRESSION against the intensity measure that preceded "
-        f"it, which called heavy rain an empty lane correctly. It is recorded rather "
-        f"than argued away. **It applies to open-air entries.** Most garage entries "
-        f"are covered, and rain is not in a covered camera's view — how many are open "
-        f"is NOT MEASURED. Across the sweep, {weather['vehicle_refusals']} of "
-        f"{weather['vehicle_cells']} vehicle scenes were refused."
-    )
     return "\n".join(lines)
 
 
-def _headlight_block(evidence: dict) -> str:
-    head = evidence["headlight"]
-    sweep = head["sweep"]
+def _weather_bands(evidence: dict) -> str:
+    answered = at(evidence, "weather.highest_coverage_still_answered_false")
+    occupied = at(evidence, "weather.lowest_coverage_reading_occupied")
+    declines = at(evidence, "weather.lowest_coverage_declining_to_answer")
+    worst = at(evidence, "weather.highest_confidence_reading_occupied")
+    if occupied is None:
+        return (
+            f"Two bands: `false` up to {_pct(answered)} of the frame in streaks, and "
+            f"`null` from {_pct(declines)}."
+        )
+    return (
+        f"**Three bands, not two.** `false` up to {_pct(answered)} of the frame in "
+        f"streaks; from {_pct(occupied)} an **empty lane reads as OCCUPIED**, at up "
+        f"to {worst:.2f} confidence; from {_pct(declines)} the gate declines to "
+        "answer at all."
+    )
+
+
+def _weather_consequence(evidence: dict) -> str:
+    occupied = at(evidence, "weather.lowest_coverage_reading_occupied")
+    if occupied is None:
+        return ""
+    return (
+        f"The band from {_pct(occupied)} is the one to read. `presence: true` with "
+        '`outcome: "fallback"` tells a lane controller that a car is there and could '
+        "not be identified, and this contract says refusing it is a bug in your "
+        "integration — so in that band a conforming lane issues a ticket and raises "
+        "an attendant for a car that is not there."
+    )
+
+
+def _weather_fraud(evidence: dict) -> str:
+    admitted = at(evidence, "weather.metal_plate_admitted_from")
+    answered = at(evidence, "weather.highest_coverage_still_answered_false")
+    if admitted is None:
+        return (
+            "The metal plate on the loop — the case this gate exists for — is refused "
+            "at every coverage measured."
+        )
+    return (
+        f"**And the fraud is admitted with it.** The metal plate on the loop — the "
+        f"case this gate exists for — is correctly refused up to {_pct(answered)} "
+        f"coverage and then **transacts from {_pct(admitted)}**, on the same streaks. "
+        "In that band the gate does not merely lose the ability to say `false`; it "
+        "issues the ticket for the exact scene it was built to refuse."
+    )
+
+
+def _weather_scope(evidence: dict) -> str:
+    refusals = at(evidence, "weather.vehicle_refusals")
+    cells = at(evidence, "weather.vehicle_cells")
+    real = _synthetic(evidence)
+    return (
+        "This is a measured REGRESSION against the intensity measure that preceded "
+        "it, which called heavy rain an empty lane correctly. It is recorded rather "
+        "than argued away. **It applies to open-air entries** — most garage entries "
+        f"are covered, and rain is not in a covered camera's view. {real}, so how "
+        f"many are open is not known either. Across the sweep, {refusals} of {cells} "
+        "vehicle scenes were refused."
+    )
+
+
+def _headlight_table(evidence: dict) -> str:
+    sweep = at(evidence, "headlight.sweep")
+    units = at(evidence, "headlight.pool_units")
     lines = [
         "**Headlights on the floor.** A covered entry is artificially lit and often "
         "dark, so an approaching car throws its beams into frame before the car "
-        "itself arrives — a large change in the scene caused by a vehicle that is not "
-        "yet the vehicle. Measured with and without the car that cast the pool.",
+        "itself arrives — a large change in the scene caused by a vehicle that is "
+        f"not yet the vehicle. Measured over {len(sweep)} pools, with and without "
+        f"the car that cast them. {units}",
         "",
         "| beam pool, peak x ambient | empty lane (car not yet in frame) | vehicle |",
         "|---|---|---|",
@@ -281,92 +500,282 @@ def _headlight_block(evidence: dict) -> str:
         lines.append(
             f"| x{1 + row['pool']:g} | {_cell(row['empty_lane'])} | {_cell(row['vehicle'])} |"
         )
-    lines.append("")
-    held = head["highest_pool_still_empty"]
-    tripped = head["lowest_pool_reading_occupied"]
+    return "\n".join(lines)
+
+
+def _headlight_boundary(evidence: dict) -> str:
+    held = at(evidence, "headlight.highest_pool_still_empty")
+    tripped = at(evidence, "headlight.lowest_pool_reading_occupied")
     if tripped is None:
-        lines.append(
+        return (
             f"An empty lane holds at `false` through every pool tested, up to "
             f"x{1 + (held or 0):g} ambient."
         )
-    else:
-        lines.append(
-            f"An empty lane holds at `false` up to a pool of x{1 + held:g} ambient and "
-            f"reads as OCCUPIED from x{1 + tripped:g} — the beams of a car that has not "
-            "arrived open a transaction for it."
+    return (
+        f"An empty lane holds at `false` up to a pool of x{1 + held:g} ambient and "
+        f"reads as OCCUPIED from x{1 + tripped:g} — the beams of a car that has not "
+        "arrived open a transaction for it."
+    )
+
+
+def _headlight_scope(evidence: dict) -> str:
+    refusals = at(evidence, "headlight.vehicle_refusals")
+    cells = at(evidence, "headlight.vehicle_cells")
+    model = at(evidence, "headlight.model")
+    real = _synthetic(evidence)
+    return (
+        f"{refusals} of {cells} vehicle scenes were refused. **The model is a "
+        f"limitation of these numbers**: {model}. A gloss or wet floor at night is a "
+        f"specular scene and this is a matte one. {real}."
+    )
+
+
+def _safety_counts(evidence: dict) -> str:
+    rows = _rows(evidence)
+    matrix_cells = sum(row["cells"] for _, row in rows)
+    matrix_refusals = sum(row["vehicle_refused"] for _, row in rows)
+    weather_cells = at(evidence, "weather.vehicle_cells")
+    weather_refusals = at(evidence, "weather.vehicle_refusals")
+    head_cells = at(evidence, "headlight.vehicle_cells")
+    head_refusals = at(evidence, "headlight.vehicle_refusals")
+    total = matrix_cells + weather_cells + head_cells
+    refusals = matrix_refusals + weather_refusals + head_refusals
+    counted = (
+        f"{matrix_cells} matrix cells, {weather_cells} weather coverages and "
+        f"{head_cells} headlight pools, each measured with a vehicle in the frame"
+    )
+    if refusals:
+        return (
+            f"**The safety property does NOT hold.** {refusals} wrongful refusals in "
+            f"{total} scenes containing a vehicle: {counted}. `false` is the only "
+            f"value that ends a transaction and {refusals} frames with a car in them "
+            "produced it. This gate is not shippable in this state."
         )
-    lines.append("")
-    lines.append(
-        f"{head['vehicle_refusals']} of {head['vehicle_cells']} vehicle scenes were "
-        f"refused. **The model is a limitation of these numbers**: {head['model']}. A "
-        "gloss or wet floor at night is a specular scene and this is a matte one. "
-        "**NOT MEASURED** on any real entry."
-    )
-    return "\n".join(lines)
-
-
-def _safety_block(evidence: dict) -> str:
-    sep = evidence["separation"]
-    weather = evidence["weather"]
-    head = evidence["headlight"]
-    matrix_cells = sum(row["cells"] for row in sep.values())
-    matrix_refusals = sum(row["vehicle_refused"] for row in sep.values())
-    total = matrix_cells + weather["vehicle_cells"] + head["vehicle_cells"]
-    refusals = matrix_refusals + weather["vehicle_refusals"] + head["vehicle_refusals"]
-    return "\n".join(
-        [
-            f"**The one thing that holds everywhere measured.** {refusals} wrongful "
-            f"refusals in {total} scenes containing a vehicle: {matrix_cells} matrix "
-            f"cells, {weather['vehicle_cells']} weather coverages and "
-            f"{head['vehicle_cells']} headlight pools, each measured with a vehicle in "
-            "the frame. `false` is the only value that ends a transaction, and no "
-            "scene measured produced it for a frame with a vehicle in it. Where this "
-            "gate fails it fails to `null` — a ticket and a human.",
-            "",
-            "Every one of those scenes is a drawn rectangle on a drawn lane. The claim "
-            "is that the measure holds across everything that has been put through it, "
-            "not that everything has been put through it.",
-        ]
+    return (
+        f"**The one thing that holds everywhere measured.** {refusals} wrongful "
+        f"refusals in {total} scenes containing a vehicle: {counted}. `false` is the "
+        "only value that ends a transaction, and no scene measured produced it for a "
+        "frame with a vehicle in it. Where this gate fails it fails to `null` — a "
+        "ticket and a human."
     )
 
 
-def _conflation_block(evidence: dict) -> str:
-    conflation = evidence["conflated_reasons"]
-    reason = ", ".join(f"`{r}`" for r in conflation["reason_reported"]) or "one reason"
+def _safety_scope(evidence: dict) -> str:
+    rows = _rows(evidence)
+    total = (
+        sum(row["cells"] for _, row in rows)
+        + at(evidence, "weather.vehicle_cells")
+        + at(evidence, "headlight.vehicle_cells")
+    )
+    real = _synthetic(evidence)
+    return (
+        f"Every one of those {total} scenes is a drawn rectangle on a drawn lane — "
+        f"{real}. The claim is that the measure holds across everything that has been "
+        "put through it, not that everything has been put through it."
+    )
+
+
+def _conflation_list(evidence: dict) -> str:
+    reasons = at(evidence, "conflated_reasons.reason_reported")
+    causes = at(evidence, "conflated_reasons.causes")
+    named = ", ".join(f"`{r}`" for r in reasons) or "no reason at all"
     lines = [
-        f"**One reason covers several unrelated conditions, and this release cannot "
-        f"tell them apart.** {reason} is reported for all of the following:",
+        f"**One reason covers {len(causes)} unrelated conditions, and this release "
+        f"cannot tell them apart.** {named} is reported for all of the following:",
         "",
     ]
-    for cause in sorted(conflation["causes"]):
-        lines.append(f"- {cause}")
-    lines += [
-        "",
-        "It is published under `camera_faults` in `GET /v1/health`, and for a moved "
-        "camera that is right. For heavy weather it is not: nothing is broken. **Do "
-        "not read this reason as a confirmed equipment fault** — read it as \"the "
-        "capture no longer matches the reference, for one of several reasons this "
-        "build cannot separate\". Separating them needs a measurement this release "
-        "does not make, and inventing one would be guessing; naming the conflation is "
-        "the honest thing available now.",
-    ]
+    lines += [f"- {cause}" for cause in sorted(causes)]
     return "\n".join(lines)
 
 
-#: Every generated section, by the key the documents mark it with.
-BLOCKS = {
-    "presence.separation": _separation_block,
-    "presence.texture": _texture_block,
-    "presence.weather": _weather_block,
-    "presence.headlight": _headlight_block,
-    "presence.safety": _safety_block,
-    "presence.conflation": _conflation_block,
+def _conflation_caveat(evidence: dict) -> str:
+    shared = at(evidence, "conflated_reasons.all_report_the_same_reason")
+    causes = at(evidence, "conflated_reasons.causes")
+    if not shared:
+        return (
+            f"The {len(causes)} conditions report different reasons, so an operator "
+            "can act on the one they are given."
+        )
+    faults = at(evidence, "conflated_reasons.causes_that_are_equipment_faults")
+    # The head of each name, before its colon: the caveat names which conditions
+    # the label is right about, and the bullets above carry the elaboration.
+    heads = sorted(name.split(":")[0] for name in faults)
+    return (
+        "It is published under `camera_faults` in `GET /v1/health`. That is right "
+        f"for {len(faults)} of the {len(causes)} — {'; '.join(heads)} — and "
+        f"wrong for the other {len(causes) - len(faults)}, where nothing is broken. "
+        "**Do not read this reason as a confirmed equipment fault** — read it as "
+        '"the capture no longer matches the reference, for one of several reasons '
+        'this build cannot separate". Separating them needs a measurement this '
+        "release does not make, and inventing one would be guessing; naming the "
+        "conflation is the honest thing available now."
+    )
+
+
+def _conflation_ordinary_arrival(evidence: dict) -> str:
+    """The one that is a product finding rather than a documentation one.
+
+    A vehicle of ordinary size, on the low-texture ground a covered entry is
+    likely to have, under a beam pool, lands on the same reason as a knocked
+    camera — so an arriving car is counted under `camera_faults` and pages a
+    technician. It is stated here from the matrix that measured it, and the
+    frequency at a real entry is stated as unmeasured, because it is.
+    """
+    rows = _rows(evidence)
+    cells = sum(row["cells"] for _, row in rows)
+    affected = [
+        (label, cell)
+        for label, row in rows
+        for cell in row["vehicle_not_measured_cells"]
+    ]
+    if not affected:
+        return ""
+    real = _synthetic(evidence)
+    label, first = affected[0]
+    return (
+        f"**One of those conditions is a car arriving.** {len(affected)} of the "
+        f"{cells} separation-matrix cells put an ordinary vehicle — "
+        f"{first['vehicle_frame_fraction']:.0%} "
+        f"of the frame, not one filling it — in front of the camera and got "
+        f"`{first['camera_health']}` back: {label}, at contrast "
+        f"{first['contrast']:g} and surface grain {first['surface']:g}. The gate "
+        "counts that under `camera_faults`, so an arriving car pages a technician "
+        f"about a working camera. {real}: how often a real covered entry lands in "
+        "this configuration is not known, and these are drawn rectangles. What is "
+        "known is that the reason cannot be read as equipment on its own."
+    )
+
+
+#: Every generated section, as the claims it is allowed to make. Order is the
+#: order they render in.
+BLOCKS: dict[str, tuple[Claim, ...]] = {
+    "presence.separation": (
+        Claim(("separation",), _separation_intro),
+        Claim(("separation",), _separation_table),
+        Claim(("separation",), _separation_summary),
+        Claim(("separation",), _separation_admissions),
+    ),
+    "presence.texture": (
+        Claim(("texture_floor.min_reference_texture",), _texture_headline),
+        Claim(
+            (
+                "texture_floor.matrix_ground_reference_texture",
+                "texture_floor.matrix_axis_can_reach_the_floor",
+            ),
+            _texture_axis,
+        ),
+        Claim(
+            (
+                "texture_floor.smooth_floor_reference_texture",
+                "texture_floor.smooth_floor.present",
+                "texture_floor.smooth_floor.camera_health",
+                "texture_floor.smooth_floor_reason",
+            ),
+            _texture_smooth_floor,
+        ),
+        Claim(
+            (
+                "texture_floor.smooth_floor_reference_texture",
+                "texture_floor.min_reference_texture",
+                "scenes.real_frames_measured",
+            ),
+            _texture_consequence,
+        ),
+    ),
+    "presence.weather": (
+        Claim(("weather.sweep",), _weather_table),
+        Claim(
+            (
+                "weather.highest_coverage_still_answered_false",
+                "weather.lowest_coverage_reading_occupied",
+                "weather.lowest_coverage_declining_to_answer",
+                "weather.highest_confidence_reading_occupied",
+            ),
+            _weather_bands,
+        ),
+        Claim(("weather.lowest_coverage_reading_occupied",), _weather_consequence),
+        Claim(
+            (
+                "weather.metal_plate_admitted_from",
+                "weather.highest_coverage_still_answered_false",
+            ),
+            _weather_fraud,
+        ),
+        Claim(
+            (
+                "weather.vehicle_refusals",
+                "weather.vehicle_cells",
+                "scenes.real_frames_measured",
+            ),
+            _weather_scope,
+        ),
+    ),
+    "presence.headlight": (
+        Claim(("headlight.sweep", "headlight.pool_units"), _headlight_table),
+        Claim(
+            (
+                "headlight.highest_pool_still_empty",
+                "headlight.lowest_pool_reading_occupied",
+            ),
+            _headlight_boundary,
+        ),
+        Claim(
+            (
+                "headlight.vehicle_refusals",
+                "headlight.vehicle_cells",
+                "headlight.model",
+                "scenes.real_frames_measured",
+            ),
+            _headlight_scope,
+        ),
+    ),
+    "presence.safety": (
+        Claim(
+            (
+                "separation",
+                "weather.vehicle_cells",
+                "weather.vehicle_refusals",
+                "headlight.vehicle_cells",
+                "headlight.vehicle_refusals",
+            ),
+            _safety_counts,
+        ),
+        Claim(
+            (
+                "separation",
+                "weather.vehicle_cells",
+                "headlight.vehicle_cells",
+                "scenes.real_frames_measured",
+            ),
+            _safety_scope,
+        ),
+    ),
+    "presence.conflation": (
+        Claim(
+            ("conflated_reasons.reason_reported", "conflated_reasons.causes"),
+            _conflation_list,
+        ),
+        Claim(
+            (
+                "conflated_reasons.all_report_the_same_reason",
+                "conflated_reasons.causes",
+                "conflated_reasons.causes_that_are_equipment_faults",
+            ),
+            _conflation_caveat,
+        ),
+        Claim(("separation", "scenes.real_frames_measured"), _conflation_ordinary_arrival),
+    ),
 }
+
+
+def render(evidence: dict, claims: tuple[Claim, ...]) -> str:
+    """One section: every claim its evidence supports, and no other words."""
+    return "\n\n".join(said for claim in claims if (said := claim.say(evidence)))
 
 
 def blocks(evidence: dict) -> dict[str, str]:
     """Every generated section, rendered from the evidence."""
-    return {key: render(evidence) for key, render in BLOCKS.items()}
+    return {key: render(evidence, claims) for key, claims in BLOCKS.items()}
 
 
 # --- the evidence file's own booleans ------------------------------------

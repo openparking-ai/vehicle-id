@@ -43,7 +43,7 @@ from .contract import SCHEMA_VERSION, Capture, Read, utc_now
 # gate on; two seams stating different limitations is how a disclosure rots.
 # Neither this import nor `presence` itself pulls in cv2 -- the CI job that
 # proves the contract stands alone has none, and must keep passing.
-from .presence import KNOWN_LIMITS, UNVALIDATED
+from .presence import CAMERA_FAULTS_CAVEAT, KNOWN_LIMITS, UNVALIDATED
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +162,12 @@ class VehicleIdService:
             # died at 3am is a run of these; a lane that is merely quiet is an
             # empty dict, and the two must not look the same from outside.
             "camera_faults": dict(getattr(self.engine, "camera_faults", {}) or {}),
+            # K3's interim disclosure, at the seam that emits the count rather
+            # than in two documents nobody reads. `reference_not_recognised`
+            # also covers heavy weather and an ordinary arrival on low-texture
+            # ground under a beam pool, and this build cannot separate them --
+            # so the operator reading the count is told before they dispatch.
+            "camera_faults_caveat": CAMERA_FAULTS_CAVEAT,
             "cursor": self.store.cursor,
             "time": utc_now(),
         }

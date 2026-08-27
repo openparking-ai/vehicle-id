@@ -272,7 +272,7 @@ def test_the_health_endpoint_states_that_presence_is_unvalidated_and_why():
     The previous round put the string in and nothing asserted it. That is the
     same shape as a guarantee that skips: present, plausible, and unproven.
     """
-    from vehicle_id.presence import KNOWN_LIMITS, UNVALIDATED
+    from vehicle_id.presence import CAMERA_FAULTS_CAVEAT, KNOWN_LIMITS, UNVALIDATED
     from vehicle_id.service import VehicleIdService
 
     service = VehicleIdService(engine_with(PresenceDetector(reference=lane(90, seed=1)),
@@ -283,36 +283,22 @@ def test_the_health_endpoint_states_that_presence_is_unvalidated_and_why():
     assert "UNVALIDATED" in health["presence_validation"]
     assert health["presence_limits"] == list(KNOWN_LIMITS)
     assert health["presence_limits"], "the endpoint names no limitations at all"
+    # X3a. The count and what it does not mean, in the same payload. An operator
+    # reading `camera_faults` is the person who would send a technician, and
+    # `reference_not_recognised` also covers heavy weather and an ordinary
+    # arrival on low-texture ground under a beam pool.
+    assert "camera_faults" in health
+    assert health["camera_faults_caveat"] == CAMERA_FAULTS_CAVEAT
 
 
-@guarantee
-def test_every_limitation_the_documents_measure_is_named_at_the_seam():
-    """The coverage control for the test above, and the one that matters.
-
-    A seam carrying a disclosure nobody keeps in step with the measurement is
-    worse than none: it reads as current. Each thing the evidence file measures
-    the gate CANNOT do has to be named at the seam, so that adding a measured
-    limitation to the documents without telling the operator turns this red.
-
-    Matched on topic rather than on numbers deliberately. Every number about
-    this gate is generated into the documents from the evidence and checked
-    against it; a number hard-coded into a runtime string could not be, and
-    would go stale exactly the way the sentence beside a correct span did.
-    """
-    from vehicle_id.presence import KNOWN_LIMITS
-
-    spoken = " ".join(KNOWN_LIMITS).lower()
-    for topic, word in (
-        ("smooth or untextured ground", "smooth"),
-        ("weather in an open-air entry", "rain"),
-        ("the metal-plate case in that band", "metal plate"),
-        ("a headlight pool before the car arrives", "headlight"),
-        ("that it fails to null rather than refusing", "null"),
-    ):
-        assert word in spoken, (
-            f"the seam does not mention {topic}; the documents measure it and the "
-            "operator switching the gate on is not told"
-        )
+# The coverage control for the disclosure -- "every limitation the measurement
+# found is named at the seam" -- is
+# `tests/test_measured_docs.py::test_every_measured_limitation_is_named_at_the_seam`.
+# It lived here and iterated a hard-coded 5-tuple of topic words while promising
+# it would go red when a measured limitation was added; it could not, and the
+# conflation sat unnamed at the seam through a whole round with this green. It
+# derives from `docs/measured/presence.json` now, and it lives in a file with no
+# cv2 import so it runs in the job that proves the contract stands alone too.
 
 
 @guarantee

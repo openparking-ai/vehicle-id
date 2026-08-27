@@ -69,6 +69,9 @@
       "cells": 18,
       "vehicle_seen": 18,
       "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
       "empty_called_empty": 0,
       "empty_false_positive": 18,
       "worst_vehicle_occupancy": 0.6981,
@@ -93,6 +96,26 @@
       "cells": 18,
       "vehicle_seen": 16,
       "vehicle_refused": 0,
+      "vehicle_not_measured": 2,
+      "vehicle_not_measured_health": {
+        "reference_not_recognised": 2
+      },
+      "vehicle_not_measured_cells": [
+        {
+          "contrast": 2.05,
+          "surface": 0.0,
+          "vehicle_frame_fraction": 0.4375,
+          "camera_health": "reference_not_recognised",
+          "reason": "only 7.5% of the reference view is still recognisable, below 10.0%; this capture is not a view of the lane the reference describes"
+        },
+        {
+          "contrast": 2.05,
+          "surface": 0.02,
+          "vehicle_frame_fraction": 0.4375,
+          "camera_health": "reference_not_recognised",
+          "reason": "only 7.4% of the reference view is still recognisable, below 10.0%; this capture is not a view of the lane the reference describes"
+        }
+      ],
       "empty_called_empty": 4,
       "empty_false_positive": 14,
       "worst_vehicle_occupancy": 0.5659,
@@ -117,6 +140,9 @@
       "cells": 18,
       "vehicle_seen": 18,
       "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
       "empty_called_empty": 18,
       "empty_false_positive": 0,
       "worst_vehicle_occupancy": 0.4276,
@@ -141,6 +167,9 @@
       "cells": 18,
       "vehicle_seen": 18,
       "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
       "empty_called_empty": 18,
       "empty_false_positive": 0,
       "worst_vehicle_occupancy": 0.4469,
@@ -165,6 +194,9 @@
       "cells": 18,
       "vehicle_seen": 18,
       "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
       "empty_called_empty": 18,
       "empty_false_positive": 0,
       "worst_vehicle_occupancy": 0.4243,
@@ -189,6 +221,9 @@
       "cells": 18,
       "vehicle_seen": 18,
       "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
       "empty_called_empty": 18,
       "empty_false_positive": 0,
       "worst_vehicle_occupancy": 0.4399,
@@ -387,6 +422,7 @@
       0.25
     ],
     "lowest_coverage_reading_occupied": 0.1,
+    "highest_confidence_reading_occupied": 0.987,
     "lowest_coverage_declining_to_answer": 0.3,
     "metal_plate_admitted_from": 0.1,
     "vehicle_cells": 8,
@@ -517,6 +553,7 @@
       }
     ],
     "model": "multiplicative pool on a matte floor; no specular glare, no beam cut-off",
+    "pool_units": "`pool` is the beam's peak as a multiple of ambient ADDED to it, so the table states peak = 1 + pool.",
     "highest_pool_still_empty": 2.0,
     "lowest_pool_reading_occupied": 3.0,
     "vehicle_cells": 8,
@@ -538,18 +575,63 @@
       "confidence": null,
       "camera_health": null
     },
+    "smooth_floor_reason": "the reference view's local texture is 0.67 grey levels, below 1.5; this ground carries nothing for a structural comparison to recognise",
     "reached": true
   },
   "conflated_reasons": {
     "causes": {
       "a vehicle close enough to fill the frame": "reference_not_recognised",
       "heavy weather": "reference_not_recognised",
-      "a capture that is not a view of this lane": "reference_not_recognised"
+      "a capture that is not a view of this lane: a camera knocked out of alignment, or a scene rebuilt overnight": "reference_not_recognised",
+      "an ordinary vehicle arriving on low-texture ground under a beam pool": "reference_not_recognised"
     },
+    "causes_that_are_equipment_faults": [
+      "a capture that is not a view of this lane: a camera knocked out of alignment, or a scene rebuilt overnight"
+    ],
     "all_report_the_same_reason": true,
     "reason_reported": [
       "reference_not_recognised"
     ]
+  },
+  "limitations": [
+    {
+      "measured_in": "separation",
+      "topic": "ground smooth enough that vehicle and empty lane do not separate",
+      "seam_word": "smooth ground"
+    },
+    {
+      "measured_in": "weather",
+      "topic": "an empty lane reads as occupied in an open-air entry in rain",
+      "seam_word": "moderate rain"
+    },
+    {
+      "measured_in": "weather",
+      "topic": "the metal plate on the loop transacts in that band",
+      "seam_word": "metal plate"
+    },
+    {
+      "measured_in": "headlight",
+      "topic": "a beam pool reads as occupied before the car that cast it arrives",
+      "seam_word": "headlight pool on the floor"
+    },
+    {
+      "measured_in": "texture_floor",
+      "topic": "ground under the texture floor is declined rather than answered",
+      "seam_word": "it fails to null"
+    },
+    {
+      "measured_in": "conflated_reasons",
+      "topic": "one reason covers several unrelated conditions",
+      "seam_word": "reference_not_recognised"
+    },
+    {
+      "measured_in": "separation",
+      "topic": "an ordinary arrival is reported as a camera fault",
+      "seam_word": "camera_faults"
+    }
+  ],
+  "scenes": {
+    "real_frames_measured": 0
   },
   "noise": {
     "reads_per_seed": 150,
@@ -673,12 +755,13 @@
       "value": false,
       "reasons_seen": {
         "a dead camera": "no_signal",
-        "a capture that is not a view of this lane": "reference_not_recognised"
+        "a vehicle close enough to fill the frame": "reference_not_recognised"
       }
     },
     "texture_floor.reached": {
-      "how": "the matrix's own ground at every value of the texture axis; sensor grain alone keeps it above the floor, so the axis cannot reach it",
-      "value": false
+      "how": "the same predicate on the matrix's own ground at its smoothest setting; sensor grain alone keeps it above the floor, so the untextured branch is never taken",
+      "value": false,
+      "reason_seen": "0.0% of the frame differs from the empty lane, threshold 15.0%"
     }
   }
 }
