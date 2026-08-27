@@ -30,7 +30,14 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
+markers = [
+  # A test that proves one of the guarantees the README makes. CI fails when one
+  # of these SKIPS without being named in VEHICLE_ID_ALLOW_SKIPPED, because a
+  # guarantee whose test can quietly not run is not a guarantee -- three of them
+  # skipped in every CI run for a fortnight while the build stayed green.
+  "guarantee: proves a published guarantee; may not skip silently",
+]
 
 [tool.ruff]
 line-length = 100

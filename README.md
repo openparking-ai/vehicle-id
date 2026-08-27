@@ -158,10 +158,18 @@ ladder:
 > feed produces a confident plate on roughly one single frame in forty.
 >
 > Reading several captures of one vehicle mitigates it, because noise reads
-> *differently* every frame and the batch then disagrees with itself: **2.3% for
-> one capture, 0.3% for three.** The **presence gate** closes the rest — with a
-> reference view of the empty lane in front of it, the same measurement is
-> **0.0% at one capture and 0.0% at three.**
+> *differently* every frame and the batch then disagrees with itself:
+> <!--m:noise.one_capture-->1.9% mean, 0.0-4.0% across 12 seeds x 150 reads<!--/m--> at one capture,
+> <!--m:noise.three_capture-->1.4% mean, 0.7-3.3% across 12 seeds x 150 reads<!--/m--> at three.
+> **It does not reach zero.**
+>
+> With a reference view of the empty lane in front of it, the presence gate
+> takes the same measurement to <!--m:noise.gated_one_capture-->0.0% (12 seeds x 150 reads, 1800 in total, none)<!--/m-->
+> at one capture and <!--m:noise.gated_three_capture-->0.0% (12 seeds x 150 reads, 1800 in total, none)<!--/m--> at three
+> — a dead feed is not a picture, and the gate stops the read before the
+> recogniser sees it. That is measured **against sensor noise**, which is one of
+> the two ways a camera fails; see the deployment note below for what it does
+> and does not cover.
 >
 > A consumer with its own second gate is not exposed to the residual: measured
 > against a lane holding a 200-plate permit list, 2 confident noise reads out of
@@ -207,14 +215,60 @@ the frame. A person holding a plate does not, and neither does rain, a bird or a
 shadow — scattered change across 45% of the frame reads as **absent**, because
 only the largest connected region counts.
 
+### Three states, and the two of them that are not a verdict
+
+`true`, `false`, `null`. `false` is a **measurement** — the lane is visible, it
+matches the reference, and there is nothing on it — and it is the only value
+that ends a transaction before it starts. So it is the only one the gate will
+say from a measurement it actually has. Everything it cannot see is `null`, and
+`null` puts the lane back to the behaviour it had before this stage existed: a
+ticket and a human.
+
+The first version of this gate did not hold that line. It measured raw intensity
+against the reference and called any large contiguous change a vehicle, so a
+dead camera, a blown exposure, dusk against a daylight reference and sun on
+tarmac all reported `presence: true`, three of them at confidence 1.0, with
+nothing in frame. None of them opened a barrier — the recogniser's measured
+operating point held — but the gate was asserting a positive measurement of
+something it had not measured, which is the failure this project exists to not
+have. Three things changed:
+
+- **A frame carrying no picture can never produce a verdict.** Flat black, flat
+  white, a taped lens, a dead feed. Caught by variance and by whether
+  neighbouring pixels agree at all, reported as a named camera fault, and the
+  read is stopped — the recogniser has no rejection stage and would mint a
+  confident plate out of it.
+- **A change in the light is cancelled before a change in the scene is looked
+  for.** One gain and one offset are fitted between the capture and the
+  reference and undone. An empty lane now reads `false` from
+  <!--m:exposure.range-->light level 20 to 250 against a reference captured at 90<!--/m-->, at
+  <!--m:exposure.holds-->every level tested<!--/m--> tested.
+- **A change that fills the frame is `null`, not `false`.** Above
+  <!--m:gate.max_occupancy-->90%<!--/m--> occupancy the scene changed rather
+  than something arriving in it — a camera that was knocked, or a van close
+  enough to fill the view. An upper bound that answered `false` would refuse the
+  vans, trucks and buses that legitimately fill an entry lane, and at the lane
+  that is no ticket, no session and no vend for a customer who is really there.
+
 > **What is measured and what is not.** This gate can be shown to reject sensor
-> noise, to reject a plate-sized object, to reject scattered speckle, and to
-> admit a plate the recogniser reads perfectly — all of which are in the test
-> suite. Its behaviour on **real vehicles at a real lane is NOT MEASURED**, and
-> will stay that way until the physical bench exists. The occupancy threshold is
+> noise, a flat or blown frame, a plate-sized object and heavy rain; to hold an
+> empty lane at `false` across the exposure range above; and to admit a lane
+> with a vehicle in it — all of which are in the test suite, and the ones that
+> need no weights run on every commit. Its behaviour on **real vehicles at a
+> real lane is NOT MEASURED**, and will stay that way until the physical bench
+> exists. The occupancy floor of <!--m:gate.min_occupancy-->15%<!--/m--> is
 > an **assumption**, not a measurement: it cannot be measured without lane
 > footage, so it is a documented, configurable number rather than a constant
-> presented as a finding.
+> presented as a finding. So is the ceiling, and so is the
+> <!--m:gate.pixel_delta-->30<!--/m-->-grey-level step that decides whether
+> a pixel changed.
+>
+> **Every figure in this file is produced by a command**, written to
+> `docs/measured/presence.json` by `scripts/eval_presence.py`, and checked
+> against the document by `tests/test_measured_docs.py`. Editing one by hand
+> turns the suite red. That rule exists because one of them was edited by hand:
+> a measured 0.7% became 0.3% with nothing re-measuring it, the repository's own
+> test still said 0.7%, and the number passed review by looking measured.
 
 ## What it does not do yet
 
