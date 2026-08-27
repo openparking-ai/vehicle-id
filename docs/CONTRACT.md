@@ -106,13 +106,14 @@ caller sending plate crops are all `null` — not because nothing is there, but
 because nobody can tell, and `null` is the value that means that.
 
 **`null` is not the only thing that happens when the gate loses the lane.** A
-scene disturbed enough — heavy weather in an open-air entry, a beam pool from a
-car that has not arrived — passes through a band where the gate reads an EMPTY
-lane as occupied and answers `true` before it gives up and answers `null`. That
-band is measured and published in the deployment section below, table by table,
-because `true` on an empty lane costs a ticket and an attendant. Whether it ever
-becomes a refusal is measured there too, and stated only there. It is not
-nothing, and it is not something a reader should have to discover.
+scene disturbed enough — bright streaks covering the camera's view of the
+ground, a beam pool from a car that has not arrived — passes through a band
+where the gate reads an EMPTY lane as occupied and answers `true` before it
+gives up and answers `null`. That band is measured and published in the
+deployment section below, table by table, because `true` on an empty lane costs
+a ticket and an attendant. Whether it ever becomes a refusal is measured there
+too, and stated only there. It is not nothing, and it is not something a reader
+should have to discover.
 
 Two invariants the record enforces, so you never have to check them:
 
