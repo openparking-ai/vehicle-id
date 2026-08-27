@@ -128,11 +128,18 @@ def cmd_serve(args) -> int:
     print(f"  weights {engine.engine.weights_id}   operating point {engine.threshold:.3f}")
     if pusher:
         print(f"  pushing every read to {args.push_to}, queued at {args.queue}")
+        # Delivers anything left outstanding by a previous run BEFORE the first
+        # vehicle of the day arrives, and keeps retrying on its own timer
+        # afterwards. Without this, retry is coupled to new traffic.
+        pusher.start()
+        print(f"  {pusher.stats.pending} read(s) still outstanding from a previous run")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print()
     finally:
+        if pusher:
+            pusher.stop()
         server.server_close()
     return 0
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -132,3 +133,108 @@ def test_the_queue_survives_a_restart(tmp_path):
     second = ReadPusher("http://consumer.invalid/reads", tmp_path / "q.jsonl", opener=back)
     second.flush()
     assert [r["read_id"] for r in back.received] == ["r1"]
+
+
+# --- the guarantee under concurrency --------------------------------------
+
+def test_concurrent_submits_never_lose_a_read(tmp_path):
+    """The queue's whole reason to exist, tested the way it actually runs.
+
+    The service is threaded, so several vehicles can be mid-read at once. The
+    first version of `flush` rewrote the file from a snapshot taken before its
+    deliveries began, which truncated anything appended during them -- reads
+    that had already been answered, with nothing on disk to say they existed.
+    """
+    import threading
+
+    consumer = Consumer()
+    consumer.mode = "down"
+    p = ReadPusher("http://consumer.invalid/reads", tmp_path / "q.jsonl", opener=consumer)
+
+    def submit(i: int) -> None:
+        p.submit(a_read(f"r{i}"))
+
+    threads = [threading.Thread(target=submit, args=(i,)) for i in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    queued = {r.read_id for r in p.queue.load()}
+    assert queued == {f"r{i}" for i in range(12)}, (
+        f"reads were answered and then lost: {sorted({f'r{i}' for i in range(12)} - queued)}"
+    )
+
+
+def test_a_read_arriving_during_a_slow_delivery_survives_it(tmp_path):
+    """The narrow version of the race, made deterministic.
+
+    One read is already queued and its delivery is made slow on purpose. A
+    second read is submitted while that delivery is in flight. Rewriting the
+    queue from the pre-delivery snapshot would drop the second one.
+    """
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow(url, payload, timeout):
+        if payload["read_id"] == "slow":
+            started.set()
+            release.wait(5)
+
+    p = ReadPusher("http://consumer.invalid/reads", tmp_path / "q.jsonl", opener=slow)
+    p.queue.append(a_read("slow"))
+
+    flusher = threading.Thread(target=p.flush)
+    flusher.start()
+    assert started.wait(5), "the slow delivery never started"
+
+    p.queue.append(a_read("arrived-mid-flight"))
+    release.set()
+    flusher.join(5)
+
+    assert [r.read_id for r in p.queue.load()] == ["arrived-mid-flight"]
+
+
+def test_start_delivers_what_a_previous_run_left_behind(tmp_path):
+    """Retry must not be coupled to new traffic.
+
+    A lane that stops at midnight with reads outstanding, and a consumer that
+    comes back at 01:00, must not wait for the next car.
+    """
+    down = Consumer()
+    down.mode = "down"
+    first = ReadPusher("http://consumer.invalid/reads", tmp_path / "q.jsonl", opener=down)
+    first.submit(a_read("left-behind"))
+    assert len(first.queue) == 1
+
+    back = Consumer()
+    second = ReadPusher("http://consumer.invalid/reads", tmp_path / "q.jsonl", opener=back)
+    second.start()
+    try:
+        assert [r["read_id"] for r in back.received] == ["left-behind"]
+    finally:
+        second.stop()
+
+
+def test_the_retry_timer_delivers_without_any_new_traffic(tmp_path):
+    consumer = Consumer()
+    consumer.mode = "down"
+    p = ReadPusher(
+        "http://consumer.invalid/reads", tmp_path / "q.jsonl",
+        retry_interval=0.05, opener=consumer,
+    )
+    p.start()          # what `vehicle-id serve` does
+    try:
+        p.submit(a_read("waiting"))
+        assert consumer.received == []
+        consumer.mode = "ok"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not consumer.received:
+            time.sleep(0.05)
+    finally:
+        p.stop()
+    assert [r["read_id"] for r in consumer.received] == ["waiting"], (
+        "nothing was retried without a new read arriving"
+    )

@@ -101,3 +101,45 @@ def test_captured_at_carries_an_offset():
     # one timezone and a consumer in another disagree about when a car arrived.
     stamp = Capture.now(b"x", camera_id="lane-1").captured_at
     assert stamp.endswith("+00:00") or stamp.endswith("Z")
+
+
+# --- the compatibility promise, which the parser has to actually keep -----
+
+def test_an_added_field_is_ignored_rather_than_rejected():
+    """`docs/CONTRACT.md`: additive changes do not bump `schema_version`, and a
+    consumer ignores what it does not recognise.
+
+    The day the make/model/colour slice adds a field to `identity` -- which the
+    contract explicitly authorises without a bump -- a parser that refused it
+    would break every consumer built on this one.
+    """
+    payload = a_read().to_dict()
+    payload["identity"]["body_type"] = "sedan"
+    payload["engine"]["runtime"] = "onnx"
+    payload["captured_by"] = "a field nobody has invented yet"
+
+    restored = Read.from_dict(payload)
+    assert restored.identity.plate == "ABC123"
+    assert restored.engine.name == "test"
+
+
+def test_ignoring_unknown_fields_does_not_mean_ignoring_a_version_bump():
+    """The control for the test above.
+
+    Tolerance for new fields must not become tolerance for a record this build
+    cannot read. If both were true, the version would mean nothing.
+    """
+    payload = a_read().to_dict()
+    payload["schema_version"] = SCHEMA_VERSION + 1
+    payload["identity"]["body_type"] = "sedan"
+    with pytest.raises(ValueError, match="unsupported schema_version"):
+        Read.from_dict(payload)
+
+
+def test_a_missing_required_field_is_still_an_error():
+    """The other control: dropping unknown fields must not quietly become
+    dropping the ones that carry meaning."""
+    payload = a_read().to_dict()
+    del payload["confidence"]
+    with pytest.raises(KeyError):
+        Read.from_dict(payload)

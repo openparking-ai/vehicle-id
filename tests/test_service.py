@@ -221,3 +221,57 @@ def test_a_failing_pusher_never_denies_the_caller_its_answer(server):
     status, payload = post(f"{base}/v1/reads", json_body(b"a plate here"), "application/json")
     assert status == 200
     assert payload["read"]["outcome"] == ANSWER
+
+
+# --- malformed requests must be answered, not dropped ---------------------
+
+@pytest.mark.parametrize(
+    "body,label",
+    [
+        (b'{"captures": ["not an object"]}', "captures holding a string"),
+        (b'{"captures": [null]}', "captures holding null"),
+        (b'{"captures": [{"image_b64": 5}]}', "image_b64 that is not a string"),
+        (b"[1, 2, 3]", "a JSON list as the body"),
+        (b'"a bare string"', "a JSON string as the body"),
+        (b"null", "a JSON null as the body"),
+    ],
+)
+def test_valid_json_that_is_not_a_valid_request_is_a_400(server, body, label):
+    """Every one of these used to kill the handler mid-response.
+
+    A dropped connection is indistinguishable from the service being down, so a
+    consumer's retry loop backs off forever instead of fixing its request --
+    which is exactly the distinction `docs/CONTRACT.md` promises a 400 makes.
+    """
+    base, _, _ = server
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        post(f"{base}/v1/reads", body, "application/json")
+    assert caught.value.code == 400, label
+
+
+def test_the_connection_survives_a_malformed_request(server):
+    """The control. A 400 is only useful if the socket is still there to carry
+    it -- and if the next, valid request still works."""
+    base, _, _ = server
+    with pytest.raises(urllib.error.HTTPError):
+        post(f"{base}/v1/reads", b"[1,2,3]", "application/json")
+    status, payload = post(f"{base}/v1/reads", json_body(b"a plate here"), "application/json")
+    assert status == 200
+    assert payload["read"]["outcome"] == ANSWER
+
+
+def test_an_engine_that_raises_is_a_500_not_a_dropped_connection(server):
+    base, stub, service = server
+    described = stub.engine
+
+    class Exploding:
+        threshold = 0.99
+        engine = described
+
+        def read(self, captures):
+            raise RuntimeError("the model file went away")
+
+    service.engine = Exploding()
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        post(f"{base}/v1/reads", json_body(b"a plate here"), "application/json")
+    assert caught.value.code == 500

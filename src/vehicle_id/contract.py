@@ -28,7 +28,7 @@ documented and hoped for:
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import UTC, datetime
 
 #: Bumped whenever the record's shape changes in a way a consumer could notice.
@@ -141,9 +141,9 @@ class Read:
             read_id=d["read_id"],
             captured_at=d["captured_at"],
             camera_id=d["camera_id"],
-            identity=Identity(**identity),
+            identity=_only_known(Identity, identity),
             confidence=d["confidence"],
-            engine=Engine(**d["engine"]),
+            engine=_only_known(Engine, d["engine"]),
             threshold_applied=d["threshold_applied"],
             outcome=d["outcome"],
             schema_version=d["schema_version"],
@@ -157,6 +157,23 @@ class Read:
         instead of hand-rolling a dict at each site.
         """
         return replace(self, identity=Identity())
+
+
+def _only_known(kind, payload: dict):
+    """Build `kind` from `payload`, dropping fields this build does not know.
+
+    The contract promises that additive changes do not bump `schema_version`
+    and that a consumer should ignore fields it does not recognise. This is the
+    reference parser, so it has to actually do that -- and nested objects are
+    where it matters most, because `identity` is exactly where the next slice
+    adds `body_type` and the rest.
+
+    Refusing an unknown field here would mean every consumer on this parser
+    breaks on the first additive change, which is the opposite of what
+    versioning it from day one was for.
+    """
+    known = {f.name for f in fields(kind)}
+    return kind(**{k: v for k, v in payload.items() if k in known})
 
 
 def utc_now() -> str:
