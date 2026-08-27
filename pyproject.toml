@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openparking-vehicle-id"
+version = "0.1.0"
+description = "Open Parking AI Vehicle ID — identify a vehicle, and say how sure you are"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
+# The contract, the service, the push queue and the CLI are standard library
+# only. A consumer integrating against this package -- reading records, building
+# captures -- needs nothing installed beyond it. Only running the engine needs
+# torch and OpenCV, and that is the `[engine]` extra.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8"]
+#   torch      BSD-3-Clause
+#   opencv     Apache-2.0
+#   rapidocr   Apache-2.0, and its PP-OCRv3 weights ship under it
+engine = ["torch>=2.4", "opencv-python-headless>=4.9", "numpy>=1.26", "rapidocr-onnxruntime>=1.2"]
+
+[project.scripts]
+vehicle-id = "vehicle_id.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
