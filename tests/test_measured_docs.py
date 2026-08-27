@@ -558,10 +558,23 @@ def test_the_streak_scope_is_stated_in_exactly_one_place():
     invisible here and should be: referring to the one definition is the
     behaviour being enforced, not the behaviour being caught.
     """
+    from vehicle_id import presence
     from vehicle_id.presence import STREAK_CONDITION
 
     tracked = _tracked_text_files()
-    allowed = {path.as_posix() for path in DOCUMENTS} | {EVIDENCE.as_posix()}
+    # The module that DEFINES it is permitted, and is named by asking the
+    # constant where it lives rather than by hardcoding a path. Stated
+    # explicitly because it would otherwise pass by accident: the definition is
+    # wrapped across three source lines, so the joined text is not a substring
+    # of its own file today, and re-wrapping it onto one line would turn this
+    # red for no reason. A permitted set that holds only while somebody keeps a
+    # line under 88 columns is not a permitted set.
+    defined_in = Path(presence.__file__).resolve().relative_to(ROOT).as_posix()
+    allowed = (
+        {path.as_posix() for path in DOCUMENTS}
+        | {EVIDENCE.as_posix()}
+        | {defined_in}
+    )
     stating = _files_stating(STREAK_CONDITION, tracked)
 
     assert stating <= allowed, (
