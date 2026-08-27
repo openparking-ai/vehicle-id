@@ -154,10 +154,20 @@ def _pct(value) -> str:
     return "—" if value is None else f"{value:.0%}"
 
 
+#: How a presence verdict is written, in one place. `str(None).lower()` reads
+#: `none`, which is a Python spelling of a value every other surface -- the
+#: contract, the tables, the engine's own JSON -- calls `null`. Two spellings of
+#: one value is the same defect as two copies of one claim.
+VERDICT = {True: "`true`", False: "`false`", None: "`null`"}
+
+
+def _verdict(present) -> str:
+    return VERDICT.get(present, f"`{present}`")
+
+
 def _cell(verdict: dict) -> str:
     """One scene's verdict as a table cell: the value, and the number behind it."""
-    present = verdict["present"]
-    word = {True: "`true`", False: "`false`", None: "`null`"}[present]
+    word = _verdict(verdict["present"])
     if verdict["occupancy"] is None:
         return f"{word} —"
     return f"{word} {verdict['occupancy']:.3f}"
@@ -381,7 +391,7 @@ def _texture_smooth_floor(evidence: dict) -> str:
     return (
         "Sealed or painted concrete under a clean sensor is a different scene: it "
         f"measures {texture} grey levels, the gate returns "
-        f"`{str(present).lower()}` {fault}, and it says why — "
+        f"{_verdict(present)} {fault}, and it says why — "
         f'"{reason}".'
     )
 
@@ -394,12 +404,13 @@ def _texture_consequence(evidence: dict) -> str:
         return ""
     return (
         f"**This matters more than the number suggests.** {texture} grey levels "
-        f"against a {floor} floor is not an exotic scene: most garage entries are "
-        "covered, and a covered entry is typically sealed or painted concrete rather "
-        "than open asphalt — smoother, less grain, fewer markings. The failing case "
-        f"may well be the common one. {real}, so how much texture a real covered "
-        "entry carries is an open question, and the remedy if it carries too little "
-        "is physical — paint markings, add a textured strip in view."
+        f"against a {floor} floor is a surface this gate declines to answer on at "
+        "all. **Whether that describes a given entry is a property of that entry** — "
+        "the operator can photograph its floor and score it by the mapping in "
+        "`docs/EVAL_DATA.md`; how many entries look like it is not something this "
+        f"project has measured. {real}, so how much texture a real covered entry "
+        "carries is an open question, and the remedy if it carries too little is "
+        "physical — paint markings, add a textured strip in view."
     )
 
 
@@ -476,10 +487,10 @@ def _weather_scope(evidence: dict) -> str:
     return (
         "This is a measured REGRESSION against the intensity measure that preceded "
         "it, which called heavy rain an empty lane correctly. It is recorded rather "
-        "than argued away. **It applies to open-air entries** — most garage entries "
-        f"are covered, and rain is not in a covered camera's view. {real}, so how "
-        f"many are open is not known either. Across the sweep, {refusals} of {cells} "
-        "vehicle scenes were refused."
+        "than argued away. **Whether it reaches a given entry depends on whether "
+        "rain falls in that camera's view** — which the operator can see and this "
+        f"project cannot count. {real}, and no frequency is claimed either way. "
+        f"Across the sweep, {refusals} of {cells} vehicle scenes were refused."
     )
 
 
@@ -615,11 +626,17 @@ def _conflation_caveat(evidence: dict) -> str:
 def _conflation_ordinary_arrival(evidence: dict) -> str:
     """The one that is a product finding rather than a documentation one.
 
-    A vehicle of ordinary size, on the low-texture ground a covered entry is
-    likely to have, under a beam pool, lands on the same reason as a knocked
-    camera — so an arriving car is counted under `camera_faults` and pages a
-    technician. It is stated here from the matrix that measured it, and the
-    frequency at a real entry is stated as unmeasured, because it is.
+    A vehicle of ordinary size, on low-texture ground under a beam pool, lands
+    on the same reason as a knocked camera — so an arriving car is counted under
+    `camera_faults` and pages a technician. It is stated here from the matrix
+    that measured it, and the frequency at a real entry is stated as unmeasured,
+    because it is.
+
+    EVERY affected cell is described, and that is the fix, not a flourish. This
+    used to take `affected[0]` and render its coordinates as the whole finding:
+    "2 of the 108 cells ... at contrast 2.05 and surface grain 0", where the two
+    cells are at surface grain 0 AND 0.02. One cell's coordinates presented as
+    describing two.
     """
     rows = _rows(evidence)
     cells = sum(row["cells"] for _, row in rows)
@@ -631,18 +648,35 @@ def _conflation_ordinary_arrival(evidence: dict) -> str:
     if not affected:
         return ""
     real = _synthetic(evidence)
-    label, first = affected[0]
+    fractions = sorted({cell["vehicle_frame_fraction"] for _, cell in affected})
+    size = (
+        f"{fractions[0]:.0%}"
+        if len(fractions) == 1
+        else f"{fractions[0]:.0%} to {fractions[-1]:.0%}"
+    )
+    named = ", ".join(
+        f"`{health}`" for health in sorted({cell["camera_health"] for _, cell in affected})
+    )
+    grouped: dict[str, list[dict]] = {}
+    for label, cell in affected:
+        grouped.setdefault(label, []).append(cell)
+    where = "; ".join(
+        f"{label} — "
+        + ", ".join(
+            f"contrast {cell['contrast']:g} / surface grain {cell['surface']:g}"
+            for cell in group
+        )
+        for label, group in grouped.items()
+    )
     return (
         f"**One of those conditions is a car arriving.** {len(affected)} of the "
-        f"{cells} separation-matrix cells put an ordinary vehicle — "
-        f"{first['vehicle_frame_fraction']:.0%} "
-        f"of the frame, not one filling it — in front of the camera and got "
-        f"`{first['camera_health']}` back: {label}, at contrast "
-        f"{first['contrast']:g} and surface grain {first['surface']:g}. The gate "
-        "counts that under `camera_faults`, so an arriving car pages a technician "
-        f"about a working camera. {real}: how often a real covered entry lands in "
-        "this configuration is not known, and these are drawn rectangles. What is "
-        "known is that the reason cannot be read as equipment on its own."
+        f"{cells} separation-matrix cells put an ordinary vehicle — {size} of the "
+        f"frame, not one filling it — in front of the camera and got {named} back. "
+        f"Each of those cells, in full: {where}. The gate counts that under "
+        "`camera_faults`, so an arriving car pages a technician about a working "
+        f"camera. {real}: how often a real entry lands in one of these "
+        "configurations is not known, and these are drawn rectangles. What is known "
+        "is that the reason cannot be read as equipment on its own."
     )
 
 
