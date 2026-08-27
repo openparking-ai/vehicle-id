@@ -275,3 +275,135 @@ def test_an_engine_that_raises_is_a_500_not_a_dropped_connection(server):
     with pytest.raises(urllib.error.HTTPError) as caught:
         post(f"{base}/v1/reads", json_body(b"a plate here"), "application/json")
     assert caught.value.code == 500
+
+
+# --- idempotency, so a re-sent request is not a second vehicle ------------
+
+def test_the_same_request_id_returns_the_same_record(server):
+    """A caller whose request timed out must be able to ask again.
+
+    Without this, the engine answers twice with two fresh `read_id`s for one
+    car, and a consumer doing exactly what the contract says -- deduplicate on
+    read_id -- records two entries for one vehicle.
+    """
+    base, engine, _ = server
+    body = json.dumps(
+        {
+            "camera_id": "lane-1",
+            "request_id": "the-same-car",
+            "captures": [{"image_b64": base64.b64encode(b"a plate here").decode()}],
+        }
+    ).encode()
+    _, first = post(f"{base}/v1/reads", body, "application/json")
+    _, again = post(f"{base}/v1/reads", body, "application/json")
+    assert first["read"]["read_id"] == again["read"]["read_id"]
+    assert engine.seen == [1], "the engine re-ran a request it had already answered"
+
+
+def test_the_idempotency_key_header_works_too(server):
+    base, engine, _ = server
+    for _ in range(2):
+        post(
+            f"{base}/v1/reads",
+            json_body(b"a plate here"),
+            "application/json",
+            {"Idempotency-Key": "abc"},
+        )
+    assert engine.seen == [1]
+
+
+def test_different_requests_are_not_collapsed(server):
+    """The control. Caching that ignores the key would be worse than no cache:
+    every vehicle would get the first one's record."""
+    base, engine, _ = server
+    for key in ("car-1", "car-2"):
+        post(
+            f"{base}/v1/reads",
+            json_body(b"a plate here"),
+            "application/json",
+            {"Idempotency-Key": key},
+        )
+    assert engine.seen == [1, 1], "two different requests were collapsed into one"
+
+
+# --- health has to be able to say something is wrong ----------------------
+
+def test_health_reports_push_state(server):
+    base, _, service = server
+
+    class Pusher:
+        class stats:
+            @staticmethod
+            def as_dict():
+                return {
+                    "delivered": 3, "refused": 0, "pending": 2,
+                    "lost": 0, "damaged": 0, "last_error": None,
+                }
+
+        def submit(self, read):
+            pass
+
+    service.pusher = Pusher()
+    _, payload = get(f"{base}/v1/health")
+    assert payload["push"]["pending"] == 2
+    assert payload["status"] == "ok"
+
+
+def test_health_goes_degraded_when_a_read_was_lost(server):
+    """It used to say `"status": "ok"` with no push field at all, in exactly the
+    case where a read had been answered and then written nowhere."""
+    base, _, service = server
+
+    class Pusher:
+        class stats:
+            @staticmethod
+            def as_dict():
+                return {
+                    "delivered": 0, "refused": 0, "pending": 0,
+                    "lost": 1, "damaged": 0, "last_error": "could not write",
+                }
+
+        def submit(self, read):
+            pass
+
+    service.pusher = Pusher()
+    _, payload = get(f"{base}/v1/health")
+    assert payload["status"] == "degraded"
+    assert payload["push"]["lost"] == 1
+
+
+# --- the cursor after a restart -------------------------------------------
+
+def test_a_cursor_ahead_of_the_service_says_so(server):
+    """The service restarted and the consumer's saved position now means
+    nothing. An empty list is indistinguishable from "nothing happened", which
+    is how a consumer misses every read after a restart."""
+    base, _, _ = server
+    post(f"{base}/v1/reads", json_body(b"a plate here"), "application/json")
+    _, payload = get(f"{base}/v1/reads?since=9999")
+    assert payload["reset"] is True
+    assert payload["reads"] == []
+
+
+def test_a_normal_cursor_is_not_flagged_as_a_reset(server):
+    base, _, _ = server
+    _, first = post(f"{base}/v1/reads", json_body(b"a plate here"), "application/json")
+    _, payload = get(f"{base}/v1/reads?since={first['cursor']}")
+    assert payload["reset"] is False
+
+
+def test_a_content_length_that_is_not_a_number_is_a_400(server):
+    """It used to drop the connection, which a consumer reads as the service
+    being down."""
+    import http.client
+
+    base, _, _ = server
+    host, port = base.removeprefix("http://").split(":")
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    conn.putrequest("POST", "/v1/reads")
+    conn.putheader("Content-Type", "application/json")
+    conn.putheader("Content-Length", "abc")
+    conn.endheaders()
+    response = conn.getresponse()
+    assert response.status == 400
+    conn.close()

@@ -31,7 +31,7 @@ import base64
 import json
 import logging
 import threading
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -88,25 +88,55 @@ class VehicleIdService:
         self.engine = engine
         self.pusher = pusher
         self.store = ReadStore(history)
+        # request_id -> the record that request produced. A caller whose request
+        # timed out can re-send it and get the SAME record back, rather than a
+        # second read of one vehicle that the consumer -- correctly
+        # deduplicating on read_id -- cannot tell from two vehicles.
+        self._answered: OrderedDict[str, tuple[int, Read]] = OrderedDict()
+        self._answered_lock = threading.Lock()
 
-    def identify(self, captures: Sequence[Capture]) -> tuple[int, Read]:
+    def identify(
+        self, captures: Sequence[Capture], request_id: str | None = None
+    ) -> tuple[int, Read]:
+        if request_id is not None:
+            with self._answered_lock:
+                seen = self._answered.get(request_id)
+            if seen is not None:
+                log.info("request %s re-presented; returning the same read", request_id)
+                return seen
         read = self.engine.read(captures)
         seq = self.store.add(read)
+        if request_id is not None:
+            with self._answered_lock:
+                self._answered[request_id] = (seq, read)
+                while len(self._answered) > DEFAULT_HISTORY:
+                    self._answered.popitem(last=False)
         if self.pusher is not None:
             try:
                 self.pusher.submit(read)
             except Exception:
-                # Push is best-effort at THIS point only because the pusher has
-                # already written the read to its durable queue. A failure here
-                # must never stop the synchronous caller getting its answer --
-                # there is a car at the barrier.
-                log.exception("push submission failed; the read is queued")
+                # The caller still gets its answer -- there is a car at the
+                # barrier and a push problem is not its problem. But this is not
+                # a deferred delivery: the read may not be on the queue at all,
+                # so the message says what is actually known, and /v1/health
+                # goes degraded so somebody finds out before the shift ends.
+                log.exception(
+                    "read %s could NOT be handed to push; it may exist nowhere. "
+                    "See /v1/health.",
+                    read.read_id,
+                )
         return seq, read
 
     def health(self) -> dict:
         engine = self.engine.engine
+        push = self.pusher.stats.as_dict() if self.pusher is not None else None
+        # A service that has lost a read, or cannot read its own queue, is not
+        # "ok". It used to say ok in exactly that case, with no push field at
+        # all to contradict it.
+        degraded = bool(push and (push["lost"] or push["damaged"]))
         return {
-            "status": "ok",
+            "status": "degraded" if degraded else "ok",
+            "push": push,
             "schema_version": SCHEMA_VERSION,
             "engine": {
                 "name": engine.name,
@@ -152,11 +182,17 @@ class _Handler(BaseHTTPRequestHandler):
                 since = int(raw)
             except ValueError:
                 return self._json(400, {"error": f"since must be an integer, got {raw!r}"})
+            current = self.service.store.cursor
             items = self.service.store.since(since)
+            # A cursor ahead of ours means the service restarted: the cursor is
+            # not durable and the consumer's saved position now means nothing.
+            # An empty list would be indistinguishable from "nothing happened",
+            # which is how a consumer misses every read after a restart.
             return self._json(
                 200,
                 {
-                    "cursor": self.service.store.cursor,
+                    "cursor": current,
+                    "reset": since > current,
                     "reads": [{"cursor": seq, "read": read.to_dict()} for seq, read in items],
                 },
             )
@@ -168,7 +204,10 @@ class _Handler(BaseHTTPRequestHandler):
         if url.path != "/v1/reads":
             return self._json(404, {"error": "no such route"})
 
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._json(400, {"error": "Content-Length is not a number"})
         if length <= 0:
             return self._json(400, {"error": "empty body"})
         if length > MAX_BODY_BYTES:
@@ -177,15 +216,18 @@ class _Handler(BaseHTTPRequestHandler):
 
         content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
         try:
-            captures = _captures_from(body, content_type, self.headers.get("X-Camera-Id"))
+            captures, body_request_id = _captures_from(
+                body, content_type, self.headers.get("X-Camera-Id")
+            )
         except ValueError as exc:
             # A malformed request is a 400 and stays a 400. It is the caller's
             # to fix, and a consumer's retry loop must be able to tell "you sent
             # nonsense" from "try again later".
             return self._json(400, {"error": str(exc)})
 
+        request_id = self.headers.get("Idempotency-Key") or body_request_id
         try:
-            seq, read = self.service.identify(captures)
+            seq, read = self.service.identify(captures, request_id=request_id)
         except Exception:
             # The engine is not allowed to take the connection down with it. A
             # dropped connection reads as "the service is gone" to a consumer,
@@ -205,7 +247,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def _captures_from(body: bytes, content_type: str, camera_header: str | None) -> list[Capture]:
+def _captures_from(
+    body: bytes, content_type: str, camera_header: str | None
+) -> tuple[list[Capture], str | None]:
     """Two accepted request shapes, because two kinds of caller exist.
 
     JSON, for a caller sending several frames of one vehicle -- which is what
@@ -239,17 +283,28 @@ def _captures_from(body: bytes, content_type: str, camera_header: str | None) ->
                 image_bytes = base64.b64decode(encoded, validate=True)
             except Exception as exc:
                 raise ValueError(f"image_b64 is not valid base64: {exc}") from exc
-            captures.append(
-                Capture(
-                    image_bytes=image_bytes,
-                    captured_at=entry.get("captured_at") or utc_now(),
-                    camera_id=entry.get("camera_id") or camera_id,
+            try:
+                captures.append(
+                    Capture(
+                        image_bytes=image_bytes,
+                        captured_at=entry.get("captured_at") or utc_now(),
+                        camera_id=entry.get("camera_id") or camera_id,
+                    )
                 )
-            )
-        return captures
+            except ValueError as exc:
+                # captured_at and camera_id are caller-supplied and used to be
+                # copied into the record untouched, whatever they were: a
+                # timestamp reading "banana", a camera_id that was an object, a
+                # naive time with no offset. A consumer prices a stay from two
+                # of those.
+                raise ValueError(f"capture rejected: {exc}") from exc
+        request_id = payload.get("request_id")
+        if request_id is not None and not isinstance(request_id, str):
+            raise ValueError("request_id must be a string")
+        return captures, request_id
 
     if content_type.startswith("image/") or content_type == "application/octet-stream":
-        return [Capture.now(body, camera_header or "unknown")]
+        return [Capture.now(body, camera_header or "unknown")], None
 
     raise ValueError(
         f"unsupported Content-Type {content_type!r}; send application/json or image/*"

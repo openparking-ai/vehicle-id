@@ -27,6 +27,7 @@ documented and hoped for:
 
 from __future__ import annotations
 
+import math
 import uuid
 from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import UTC, datetime
@@ -43,6 +44,53 @@ FALLBACK = "fallback"
 OUTCOMES = (ANSWER, FALLBACK)
 
 
+def _text(value, field_name: str) -> str:
+    """A string, or a refusal that names the field.
+
+    Every one of these used to be copied verbatim out of the request into the
+    record: `captured_at: "banana"`, `camera_id: {"a": 1}`, a naive timestamp
+    with no offset. All produced a 200 with `outcome: "answer"`, and a consumer
+    pricing a stay from two such timestamps has no way to know.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string, got {value!r}")
+    return value
+
+
+def _iso_utc(value, field_name: str) -> str:
+    """An ISO 8601 timestamp that carries an offset.
+
+    A naive timestamp is refused rather than assumed to be UTC. Assuming is how
+    a lane in one timezone and a consumer in another end up disagreeing about
+    when a car arrived, months later, with the money already collected.
+    """
+    text = _text(value, field_name)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} is not ISO 8601: {text!r}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field_name} has no UTC offset: {text!r}")
+    return text
+
+
+def _unit_interval(value, field_name: str) -> float:
+    """A real number within [0, 1].
+
+    `True` is excluded explicitly. Python says `0.0 <= True <= 1.0`, so a
+    `confidence` of `true` -- a field carrying no measurement at all -- used to
+    reach the lane as maximum confidence and open a barrier.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a number, got {value!r}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{field_name} must be finite, got {value!r}")
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(f"{field_name} must be within [0, 1], got {value!r}")
+    return number
+
+
 @dataclass(frozen=True, slots=True)
 class Capture:
     """One image handed to the engine, plus enough provenance to argue later.
@@ -56,6 +104,12 @@ class Capture:
     image_bytes: bytes
     captured_at: str
     camera_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.image_bytes, (bytes, bytearray)):
+            raise ValueError("image_bytes must be bytes")
+        _iso_utc(self.captured_at, "captured_at")
+        _text(self.camera_id, "camera_id")
 
     @staticmethod
     def now(image_bytes: bytes, camera_id: str) -> Capture:
@@ -77,6 +131,17 @@ class Identity:
     model: str | None = None
     color: str | None = None
     marks: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        # An int plate was accepted here and then crashed inside the lane's
+        # decision path on `.upper()`. A field that carries an identity has to
+        # be text or absent; there is no third thing it could sensibly be.
+        for name in ("plate", "plate_region", "make", "model", "color"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"identity.{name} must be a string or null, got {value!r}")
+        if not all(isinstance(mark, str) for mark in self.marks):
+            raise ValueError(f"identity.marks must all be strings, got {self.marks!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,13 +170,37 @@ class Read:
     engine: Engine
     threshold_applied: float
     outcome: str
+    #: How many captures the engine was handed for this read. Additive, and
+    #: present so that "one confident record" and "the batch disagreed with
+    #: itself" are distinguishable after the fact rather than only in a log.
+    captures_seen: int = 1
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        if not isinstance(self.schema_version, int) or isinstance(self.schema_version, bool):
+            # `True == 1` in Python, so a bare equality check accepted
+            # `schema_version: true` and let the record through.
+            raise ValueError(f"schema_version must be an integer, got {self.schema_version!r}")
         if self.outcome not in OUTCOMES:
             raise ValueError(f"outcome must be one of {OUTCOMES}, got {self.outcome!r}")
-        if not 0.0 <= self.confidence <= 1.0:
-            raise ValueError(f"confidence must be within [0, 1], got {self.confidence!r}")
+        _text(self.read_id, "read_id")
+        _iso_utc(self.captured_at, "captured_at")
+        _text(self.camera_id, "camera_id")
+        confidence = _unit_interval(self.confidence, "confidence")
+        threshold = _unit_interval(self.threshold_applied, "threshold_applied")
+
+        # The one relationship this record exists to express, and the one thing
+        # that used to be unchecked: a record cannot claim the engine stood
+        # behind it while carrying a confidence the stated operating point would
+        # have rejected. Every combination below reached the lane and opened a
+        # barrier -- `answer` at 0.86 against a threshold of 0.99, a threshold
+        # of None, of NaN, of -5.
+        if self.outcome == ANSWER and confidence < threshold:
+            raise ValueError(
+                f"outcome is {ANSWER!r} but confidence {confidence} is below the "
+                f"stated threshold_applied {threshold}. A record cannot claim an "
+                "operating point it did not clear."
+            )
 
     @property
     def is_answer(self) -> bool:
@@ -129,9 +218,10 @@ class Read:
 
     @staticmethod
     def from_dict(d: dict) -> Read:
-        if d.get("schema_version") != SCHEMA_VERSION:
+        version = d.get("schema_version")
+        if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
             raise ValueError(
-                f"unsupported schema_version {d.get('schema_version')!r}; "
+                f"unsupported schema_version {version!r}; "
                 f"this build understands {SCHEMA_VERSION}. Refusing to guess "
                 "which fields still mean what they used to."
             )
@@ -146,6 +236,7 @@ class Read:
             engine=_only_known(Engine, d["engine"]),
             threshold_applied=d["threshold_applied"],
             outcome=d["outcome"],
+            captures_seen=d.get("captures_seen", 1),
             schema_version=d["schema_version"],
         )
 

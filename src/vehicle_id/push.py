@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -43,6 +44,22 @@ class PushStats:
     delivered: int = 0
     refused: int = 0
     pending: int = 0
+    #: Reads that could not even be written to the queue. Nothing acknowledged
+    #: them and nothing holds them; this is the count of records that existed
+    #: for the length of one HTTP response.
+    lost: int = 0
+    damaged: int = 0
+    last_error: str | None = None
+
+    def as_dict(self) -> dict:
+        return {
+            "delivered": self.delivered,
+            "refused": self.refused,
+            "pending": self.pending,
+            "lost": self.lost,
+            "damaged": self.damaged,
+            "last_error": self.last_error,
+        }
 
 
 class ReadQueue:
@@ -56,12 +73,26 @@ class ReadQueue:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        #: Lines this build could not read, kept rather than dropped.
+        self.damaged = self.path.with_suffix(self.path.suffix + ".damaged")
+        self._damaged_count = 0
         self._lock = threading.Lock()
 
+    @property
+    def damaged_count(self) -> int:
+        return self._damaged_count
+
     def append(self, read: Read) -> None:
-        with self._lock, self.path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(read.to_dict()) + "\n")
-            fh.flush()
+        with self._lock:
+            new = not self.path.exists()
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(read.to_dict()) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            if new:
+                # The queue holds plates. It is trusted local state and it is
+                # the process's own; nothing else has business reading it.
+                self.path.chmod(0o600)
 
     def load(self) -> list[Read]:
         with self._lock:
@@ -70,13 +101,45 @@ class ReadQueue:
     def _load_unlocked(self) -> list[Read]:
         if not self.path.exists():
             return []
-        reads = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
+        reads: list[Read] = []
+        damaged: list[str] = []
+        for line in self.path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
                 reads.append(Read.from_dict(json.loads(line)))
+            except Exception as exc:
+                # A power cut mid-append leaves a partial line. Raising here
+                # took the whole service down at startup -- the barrier dead
+                # until someone found the bad line at 2am -- which is a far
+                # worse failure than losing the one read that was being written
+                # when the power went. It is quarantined, counted and shouted
+                # about, never silently discarded.
+                damaged.append(line)
+                log.error("unreadable line in %s, quarantined: %s", self.path, exc)
+        if damaged:
+            # Moved out of the queue as soon as it is found, once: appended to
+            # the quarantine file and removed from the queue in the same breath.
+            # Leaving it in place meant every subsequent load re-counted the
+            # same torn line, and the tally on /v1/health was a function of how
+            # often the queue happened to be read.
+            with self.damaged.open("a", encoding="utf-8") as fh:
+                fh.write("\n".join(damaged) + "\n")
+            self._damaged_count += len(damaged)
+            self._write_unlocked(reads)
         return reads
 
-    def settle(self, settled: set[str]) -> None:
+    def _write_unlocked(self, reads: list[Read]) -> None:
+        scratch = self.path.with_suffix(self.path.suffix + ".partial")
+        with scratch.open("w", encoding="utf-8") as fh:
+            for read in reads:
+                fh.write(json.dumps(read.to_dict()) + "\n")
+            fh.flush()
+        # Written to a sibling then moved, so an interruption leaves either the
+        # old queue or the new one and never a half-written file.
+        scratch.replace(self.path)
+
+    def settle(self, settled: list[str]) -> None:
         """Remove exactly the reads named, and nothing else.
 
         Deliberately NOT "rewrite the queue with what is left over", which is
@@ -85,19 +148,22 @@ class ReadQueue:
         file from a snapshot taken before that append truncates the new read
         off the queue forever -- and it had already been answered 200.
 
-        Re-reading under the lock and removing by identity means anything that
+        Re-reading under the lock and removing by occurrence means anything that
         arrived mid-flight is still there afterwards.
         """
         with self._lock:
-            keep = [read for read in self._load_unlocked() if read.read_id not in settled]
-            scratch = self.path.with_suffix(self.path.suffix + ".partial")
-            with scratch.open("w", encoding="utf-8") as fh:
-                for read in keep:
-                    fh.write(json.dumps(read.to_dict()) + "\n")
-                fh.flush()
-            # Written to a sibling then moved, so an interruption leaves either
-            # the old queue or the new one and never a half-written file.
-            scratch.replace(self.path)
+            # Removed by OCCURRENCE, not by identity. The contract says
+            # duplicate read_ids are normal -- a re-send, a restored backup --
+            # and removing by id took out every copy, including one whose
+            # delivery had just failed and which was still owed to the consumer.
+            remaining = list(settled)
+            keep = []
+            for read in self._load_unlocked():
+                if read.read_id in remaining:
+                    remaining.remove(read.read_id)
+                    continue
+                keep.append(read)
+            self._write_unlocked(keep)
 
     def __len__(self) -> int:
         return len(self.load())
@@ -131,8 +197,20 @@ class ReadPusher:
         self._open = opener or _post
 
     def submit(self, read: Read) -> None:
-        """Durably queue a read, then try to deliver everything outstanding."""
-        self.queue.append(read)
+        """Durably queue a read, then try to deliver everything outstanding.
+
+        An append that fails is DATA LOSS, not a deferred delivery, and it is
+        raised so the caller cannot log "the read is queued" over the top of it
+        -- which is what used to happen with a full disk or an unwritable queue:
+        a 200, a reassuring log line, a health check still saying ok, and the
+        record nowhere on earth.
+        """
+        try:
+            self.queue.append(read)
+        except Exception:
+            self.stats.lost += 1
+            self.stats.last_error = f"could not write {read.read_id} to {self.queue.path}"
+            raise
         self.flush()
 
     def start(self) -> None:
@@ -164,7 +242,7 @@ class ReadPusher:
                 self.stats.pending = 0
                 return self.stats
 
-            settled: set[str] = set()
+            settled: list[str] = []
             deferred = 0
             for read in outstanding:
                 if deferred:
@@ -176,7 +254,8 @@ class ReadPusher:
                     self._open(self.url, read.to_dict(), self.timeout)
                 except Refused as refusal:
                     self.stats.refused += 1
-                    settled.add(read.read_id)
+                    self.stats.last_error = f"consumer refused {read.read_id} with {refusal.status}"
+                    settled.append(read.read_id)
                     log.warning(
                         "consumer refused read %s with %s; dropping it rather than "
                         "blocking the queue behind it",
@@ -185,16 +264,18 @@ class ReadPusher:
                     )
                 except Exception as exc:  # transport, timeout, consumer down
                     log.info("delivery of read %s deferred: %s", read.read_id, exc)
+                    self.stats.last_error = f"{type(exc).__name__}: {exc}"
                     deferred += 1
                 else:
                     self.stats.delivered += 1
-                    settled.add(read.read_id)
+                    settled.append(read.read_id)
 
             # Remove exactly what was settled. Anything appended by another
             # thread while the deliveries above were in flight is still on the
             # queue afterwards, which is the whole point.
             self.queue.settle(settled)
             self.stats.pending = len(self.queue)
+            self.stats.damaged = self.queue.damaged_count
             return self.stats
 
 
