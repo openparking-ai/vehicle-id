@@ -297,15 +297,17 @@ def test_the_metal_plate_is_admitted_in_moderate_weather(detector):
 
     A person holding something over the loop is refused on a dry lane -- that is
     the whole point of this module. In the `true` band it is not: it transacts,
-    on the strength of the rain rather than the object. The gate does not merely
-    lose the ability to say `false` there; it issues the ticket for the exact
-    scene it was built to refuse.
+    on the strength of the streaks rather than the object. The gate does not
+    merely lose the ability to say `false` there; it issues the ticket for the
+    exact scene it was built to refuse.
 
     This is asserted rather than merely documented because it is the thing a
     garage operator is buying, and a regression back into silence about it
-    should turn the suite red. Whether it reaches a given entry depends on
-    whether rain falls in that camera's view -- a per-site condition, not a
-    frequency: how many entries are open to it is NOT MEASURED.
+    should turn the suite red. Whether it reaches a given entry is
+    `presence.STREAK_CONDITION` -- a per-site condition, not a frequency, and
+    keyed on the streaks rather than on rain, because coverage of the frame is
+    what the sweep varies and `rain()` draws snow from the same function. How
+    many entries stand where something produces them is NOT MEASURED.
     """
     plate = vehicle(80, 40, seed=7, contrast=2.05)
     dry = detector.measure([plate])
