@@ -315,7 +315,7 @@ def weather(detector, coverages=RAIN_COVERAGES) -> dict:
     }
 
 
-def headlights(detector, amounts=HEADLIGHT_LEVELS) -> dict:
+def headlights(detector, amounts=HEADLIGHT_LEVELS, ambient: float = 90) -> dict:
     """A beam pool on the floor, with and without the car that cast it.
 
     M3's axis. A car with its beams on throws them into frame BEFORE the car
@@ -325,14 +325,30 @@ def headlights(detector, amounts=HEADLIGHT_LEVELS) -> dict:
     The empty-lane row is the interesting one: it is the second before a car
     arrives, and a `true` there is a transaction opened for a vehicle that has
     not got there. The vehicle row is the ordinary night arrival.
+
+    G1: `ambient` is a PARAMETER and every row records the level it was measured
+    at, because the boundary is a property of the sweep and not of the gate --
+    `lane()` clips to uint8 after the pool multiplies, so saturation and
+    therefore the boundary move with the level. It was previously pinned at 90
+    inside the body, where nothing published it. `ambient_levels_swept` is
+    counted from the rows rather than typed, so the claim that the dependence is
+    NOT MEASURED branches on a value and stops being true on its own the day a
+    second level is swept.
     """
     sweep = []
     for amount in amounts:
-        empty = detector.measure([lane(90, seed=610, headlight=amount)])
+        empty = detector.measure([lane(ambient, seed=610, headlight=amount)])
         car = detector.measure(
-            [vehicle(*VEHICLE_SIZE, seed=611, contrast=1.0, headlight=amount)]
+            [vehicle(*VEHICLE_SIZE, level=ambient, seed=611, contrast=1.0, headlight=amount)]
         )
-        sweep.append({"pool": amount, "empty_lane": _verdict(empty), "vehicle": _verdict(car)})
+        sweep.append(
+            {
+                "pool": amount,
+                "ambient": ambient,
+                "empty_lane": _verdict(empty),
+                "vehicle": _verdict(car),
+            }
+        )
 
     held = [r["pool"] for r in sweep if r["empty_lane"]["present"] is False]
     tripped = [r["pool"] for r in sweep if r["empty_lane"]["present"] is True]
@@ -340,14 +356,15 @@ def headlights(detector, amounts=HEADLIGHT_LEVELS) -> dict:
     return {
         "sweep": sweep,
         "model": "multiplicative pool on a matte floor; no specular glare, no beam cut-off",
-        # X5. `pool` is what the beam ADDS, so a table reading "x3" sits beside a
-        # published 2.0 and the two look like a contradiction to anybody who
-        # opens this file. The convention is published rather than left in the
-        # renderer, so the document states it from here.
-        "pool_units": (
-            "`pool` is the beam's peak as a multiple of ambient ADDED to it, so the "
-            "table states peak = 1 + pool."
-        ),
+        # X5/G6. `pool` is what the beam ADDS and PEAK is the published
+        # convention, so the two differ by one and a table reading "x3" sits
+        # beside a stored 2.0. The offset is published as a VALUE rather than
+        # as a sentence a reader has to have read: every rendered figure derives
+        # from it, and the table carries both columns so the conversion is on
+        # the page rather than in someone's memory.
+        "peak_offset": 1,
+        "ambient_level": ambient,
+        "ambient_levels_swept": len({row["ambient"] for row in sweep}),
         "highest_pool_still_empty": max(held) if held else None,
         "lowest_pool_reading_occupied": min(tripped) if tripped else None,
         "vehicle_cells": len(sweep),
@@ -751,10 +768,13 @@ def main() -> int:
 
     print("measuring a headlight pool on the floor, with and without the car ...")
     headlight_result = headlights(detector)
+    offset = headlight_result["peak_offset"]
     held = headlight_result["highest_pool_still_empty"] or 0
     tripped = headlight_result["lowest_pool_reading_occupied"] or 0
-    print(f"  empty lane holds to a pool of x{1 + held:g}, "
-          f"reads occupied from x{1 + tripped:g}; "
+    print(f"  empty lane holds to a pool of x{offset + held:g}, "
+          f"reads occupied from x{offset + tripped:g}, "
+          f"at ambient level {headlight_result['ambient_level']:g} "
+          f"({headlight_result['ambient_levels_swept']} level swept); "
           f"vehicles refused: {headlight_result['vehicle_refusals']}")
 
     print("measuring the ground the structural comparison cannot serve ...")

@@ -433,6 +433,7 @@
     "sweep": [
       {
         "pool": 0.0,
+        "ambient": 90,
         "empty_lane": {
           "present": false,
           "occupancy": 0.001,
@@ -448,6 +449,7 @@
       },
       {
         "pool": 0.5,
+        "ambient": 90,
         "empty_lane": {
           "present": false,
           "occupancy": 0.0004,
@@ -463,6 +465,7 @@
       },
       {
         "pool": 1.0,
+        "ambient": 90,
         "empty_lane": {
           "present": false,
           "occupancy": 0.0002,
@@ -478,6 +481,7 @@
       },
       {
         "pool": 2.0,
+        "ambient": 90,
         "empty_lane": {
           "present": false,
           "occupancy": 0.001,
@@ -493,6 +497,7 @@
       },
       {
         "pool": 3.0,
+        "ambient": 90,
         "empty_lane": {
           "present": true,
           "occupancy": 0.2049,
@@ -508,6 +513,7 @@
       },
       {
         "pool": 4.0,
+        "ambient": 90,
         "empty_lane": {
           "present": true,
           "occupancy": 0.3349,
@@ -523,6 +529,7 @@
       },
       {
         "pool": 6.0,
+        "ambient": 90,
         "empty_lane": {
           "present": true,
           "occupancy": 0.4768,
@@ -538,6 +545,7 @@
       },
       {
         "pool": 8.0,
+        "ambient": 90,
         "empty_lane": {
           "present": true,
           "occupancy": 0.8043,
@@ -553,7 +561,9 @@
       }
     ],
     "model": "multiplicative pool on a matte floor; no specular glare, no beam cut-off",
-    "pool_units": "`pool` is the beam's peak as a multiple of ambient ADDED to it, so the table states peak = 1 + pool.",
+    "peak_offset": 1,
+    "ambient_level": 90,
+    "ambient_levels_swept": 1,
     "highest_pool_still_empty": 2.0,
     "lowest_pool_reading_occupied": 3.0,
     "vehicle_cells": 8,

@@ -531,19 +531,25 @@ def _weather_scope(evidence: dict) -> str:
 
 def _headlight_table(evidence: dict) -> str:
     sweep = at(evidence, "headlight.sweep")
-    units = at(evidence, "headlight.pool_units")
+    offset = at(evidence, "headlight.peak_offset")
+    level = at(evidence, "headlight.ambient_level")
     lines = [
         "**Headlights on the floor.** A car with its beams on throws them into "
         "frame before the car itself arrives — a large change in the scene caused "
         f"by a vehicle that is not yet the vehicle. Measured over {len(sweep)} "
-        f"pools, with and without the car that cast them. {units}",
+        f"pools at ambient level {level:g}, with and without the car that cast "
+        f"them. The published figure is the beam's PEAK as a multiple of ambient; "
+        f"the evidence stores what the beam adds, and peak = pool + {offset:g}. "
+        "Both columns are here so the conversion is on the page.",
         "",
-        "| beam pool, peak x ambient | empty lane (car not yet in frame) | vehicle |",
-        "|---|---|---|",
+        "| beam pool, peak x ambient | pool, as stored | ambient level | "
+        "empty lane (car not yet in frame) | vehicle |",
+        "|---|---|---|---|---|",
     ]
     for row in sweep:
         lines.append(
-            f"| x{1 + row['pool']:g} | {_cell(row['empty_lane'])} | {_cell(row['vehicle'])} |"
+            f"| x{offset + row['pool']:g} | {row['pool']:g} | {row['ambient']:g} | "
+            f"{_cell(row['empty_lane'])} | {_cell(row['vehicle'])} |"
         )
     return "\n".join(lines)
 
@@ -551,15 +557,48 @@ def _headlight_table(evidence: dict) -> str:
 def _headlight_boundary(evidence: dict) -> str:
     held = at(evidence, "headlight.highest_pool_still_empty")
     tripped = at(evidence, "headlight.lowest_pool_reading_occupied")
+    offset = at(evidence, "headlight.peak_offset")
+    level = at(evidence, "headlight.ambient_level")
     if tripped is None:
         return (
-            f"An empty lane holds at `false` through every pool tested, up to "
-            f"x{1 + (held or 0):g} ambient."
+            f"At ambient level {level:g}, an empty lane holds at `false` through "
+            f"every pool tested, up to x{offset + (held or 0):g} ambient."
         )
     return (
-        f"An empty lane holds at `false` up to a pool of x{1 + held:g} ambient and "
-        f"reads as OCCUPIED from x{1 + tripped:g} — the beams of a car that has not "
-        "arrived open a transaction for it."
+        f"At ambient level {level:g}, an empty lane holds at `false` up to a pool "
+        f"of x{offset + held:g} ambient and reads as OCCUPIED from "
+        f"x{offset + tripped:g} — the beams of a car that has not arrived open a "
+        "transaction for it."
+    )
+
+
+def _headlight_ambient(evidence: dict) -> str:
+    """G1. The condition the boundary was measured under, attached to it.
+
+    The boundary is not a property of the gate: `lane()` clips to 8 bits after
+    the beam pool multiplies, so how much of the frame saturates — and where the
+    boundary falls — moves with the ambient level. Deleting the number was tried
+    and is not a deletion, because the table publishes it row by row. So the
+    condition travels with it, and the not-measured claim branches on the COUNT
+    of levels swept rather than being a fixed string.
+    """
+    swept = at(evidence, "headlight.ambient_levels_swept")
+    level = at(evidence, "headlight.ambient_level")
+    if swept > 1:
+        return (
+            f"**That boundary was measured at {swept} ambient levels.** Where it "
+            "falls at each is in the table above; the dependence on ambient light "
+            "is measured, not assumed."
+        )
+    return (
+        f"**That boundary is a property of this sweep, not of the gate.** It was "
+        f"measured at {swept} ambient level — {level:g} — and it MOVES with that "
+        "level: the lane is clipped to 8 bits after the pool multiplies, so how "
+        "much of the frame saturates, and therefore where the boundary falls, "
+        "depends on how bright the lane was to begin with. **How it moves is NOT "
+        "MEASURED**, and the level the reference is captured at is a fixture "
+        "choice nothing has measured either. Read the number as: this is what "
+        "happened at this one level."
     )
 
 
@@ -779,13 +818,22 @@ BLOCKS: dict[str, tuple[Claim, ...]] = {
         ),
     ),
     "presence.headlight": (
-        Claim(("headlight.sweep", "headlight.pool_units"), _headlight_table),
+        Claim(
+            ("headlight.sweep", "headlight.peak_offset", "headlight.ambient_level"),
+            _headlight_table,
+        ),
         Claim(
             (
                 "headlight.highest_pool_still_empty",
                 "headlight.lowest_pool_reading_occupied",
+                "headlight.peak_offset",
+                "headlight.ambient_level",
             ),
             _headlight_boundary,
+        ),
+        Claim(
+            ("headlight.ambient_levels_swept", "headlight.ambient_level"),
+            _headlight_ambient,
         ),
         Claim(
             (
