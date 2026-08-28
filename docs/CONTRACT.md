@@ -336,14 +336,25 @@ Three things this release does NOT do, stated rather than left to be discovered:
   a `false` that would refuse every customer of every crop-submitting
   deployment.
 
-- **The service is not authenticated.** Anything that can reach the port can
-  submit captures and read records, and a consumer cannot tell this engine from
-  another process that bound the port first. Keep it on loopback, or on a
-  segment you control. Do not expose it.
-- **The push queue is trusted local state.** It is a plain file, created `0600`,
-  and whatever is in it is delivered. Anything that can write to it can put a
-  record of its choosing in front of your consumer. Protect it as you would a
-  credential.
+- **On loopback the service is not authenticated.** Anything on this machine
+  that can reach the port can submit captures and read records, and a consumer
+  cannot tell this engine from another process that bound the port first.
+- **Off loopback it refuses to start without a shared token.** `--host`
+  anything but loopback requires `--auth-token-file`, and with a token every
+  read route — `POST /v1/reads`, `GET /v1/reads`, `GET /v1/reads/last` —
+  requires `Authorization: Bearer <token>` and answers `401` without it.
+  `GET /v1/health` stays open: it carries no plate and no image, and a monitor
+  that must hold the read credential to ask whether the process is alive is
+  that credential in one more place.
+- **The token is read from a FILE, never from a flag value.** A value on the
+  command line is readable by every user on the box for as long as the process
+  runs.
+- **The push queue is trusted local state, and the DIRECTORY is what makes that
+  sound.** The queue is a plain file, created `0600`, and whatever is in it is
+  delivered — a line written into it by hand is loaded, built into a record and
+  delivered as a genuine read. So the service creates its queue directory
+  `0700` and REFUSES to start on one that is wider, or owned by another user.
+  There is no flag that turns that off.
 
 ## What presence is measured to do, and what it is measured NOT to do
 

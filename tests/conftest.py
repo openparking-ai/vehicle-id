@@ -39,6 +39,11 @@ GUARANTEE_MODULES = (
     "test_measured_docs.py",
     "test_plates.py",
     "test_push.py",
+    # The two routes to a forged read that need no camera: an exposed bind with
+    # no credential, and a queue directory anybody can write. Neither needs
+    # torch or cv2, so neither has a reason to skip -- which is exactly why a
+    # skip here should stop the build rather than pass unnoticed.
+    "test_exposure.py",
 )
 
 _skipped: list[tuple[str, str]] = []
