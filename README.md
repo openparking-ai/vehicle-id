@@ -300,7 +300,7 @@ It separates vehicle from empty in 4 of 6 configurations, with a worst-case occu
 It does **not** separate in ground texture 0.25, headlights off: 18 of 18 empty lanes read as occupied.
 It does **not** separate in ground texture 0.25, headlight pool x3: 14 of 18 empty lanes read as occupied.
 
-**A vehicle is admitted in 106 of the 108 cells**, including at the ground's exact luminance, where the vehicle and the ground it stands on are the same brightness. None of them was refused. In the remaining 2 presence is `null` and the gate reports a camera fault: `reference_not_recognised` in 2. A cell that is not measured is not a refusal — the lane falls back to a ticket and a human — but it is a frame with a car in it that this gate answered nothing about, and the reason it gave names equipment.
+**A vehicle is admitted in 106 of the 108 cells**, including at the ground's exact luminance, where the vehicle and the ground it stands on are the same brightness. None of them was refused. In the remaining 2 presence is `null` and the gate reports a camera fault: `reference_not_recognised` in 2. A cell that is not measured is not a refusal — but it is a frame with a car in it that this gate answered nothing about, and the reason it gave names equipment.
 <!--/mb-->
 
 <!--mb:presence.texture-->
@@ -356,7 +356,7 @@ At ambient level 90, an empty lane holds at `false` up to a pool of x3 ambient a
 <!--/mb-->
 
 <!--mb:presence.safety-->
-**The one thing that holds everywhere measured.** 0 wrongful refusals in 124 scenes containing a vehicle: 108 matrix cells, 8 weather coverages and 8 headlight pools, each measured with a vehicle in the frame. `false` is the only value that ends a transaction, and no scene measured produced it for a frame with a vehicle in it. Where this gate fails it fails to `null` — a ticket and a human.
+**The one thing that holds everywhere measured.** 0 wrongful refusals in 124 scenes containing a vehicle: 108 matrix cells, 8 weather coverages and 8 headlight pools, each measured with a vehicle in the frame. `false` is the only value that ends a transaction, and no scene measured produced it for a frame with a vehicle in it. Where this gate fails it fails to `null`.
 
 Every one of those 124 scenes is a drawn rectangle on a drawn lane — NOT MEASURED on any real frame (0 have ever been through this gate). The claim is that the measure holds across everything that has been put through it, not that everything has been put through it.
 <!--/mb-->

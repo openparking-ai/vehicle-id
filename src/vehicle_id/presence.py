@@ -272,7 +272,7 @@ KNOWN_LIMITS = (
     "a bright enough headlight pool on the floor reads as occupied before the "
     "car that cast it is in frame",
     "no scene measured has produced `false` for a frame with a vehicle in it; "
-    "where it fails, it fails to null -- a ticket and a human",
+    "where it fails, it fails to null",
     CAMERA_FAULTS_CAVEAT,
 )
 

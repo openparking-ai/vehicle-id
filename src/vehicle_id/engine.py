@@ -155,7 +155,7 @@ class PlateEngine:
             #
             # And it is NOT `presence: false`: that claim says the lane is
             # visible and empty and ends the transaction before it starts. This
-            # one says nobody can see, which is a ticket and a human.
+            # one says nobody can see.
             log.warning(
                 "camera fault (%s: %s); not reading", presence.camera_health, presence.reason
             )
