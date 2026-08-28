@@ -180,17 +180,7 @@ DEFAULT_MIN_FRAME_STD = 4.0
 #: structured. Neighbouring pixels of any real photograph agree; neighbouring
 #: samples of sensor noise do not. Measured as the correlation between a frame
 #: and itself shifted one pixel, and no model or dataset is involved in the
-#: distinction. Measured on the scenes in `tests/lanes.py`:
-#:
-#:     lane view          0.92      plate crop        0.90
-#:     lane + vehicle     0.98      heavy rain (45%)  0.57
-#:     salt noise (45%)   0.02      dead feed         0.0005
-#:
-#: The threshold sits between the two clusters rather than beside either: rain
-#: is the lowest thing that must survive and salt noise the highest that must
-#: not, and 0.25 is roughly the middle of that gap in log terms. Weather has to
-#: clear it comfortably, because a lane that falls back all afternoon whenever
-#: it rains is a lane nobody keeps.
+#: distinction.
 #:
 #: It matters that this is separate from "does it match the reference". A tight
 #: plate crop does not match a lane reference either, and a caller replacing an
