@@ -1,8 +1,26 @@
 """Never wrong silently, proven on the real recogniser.
 
 Skipped when the weights are absent, because they are not committed by design.
-CI trains a small model first, so the guarantee is enforced there rather than
-being a test nobody ever runs.
+
+**Most of this file does not run in CI, and that is not a hidden fact any more.**
+CI trains a 600-step model to prove the pipeline; a model that small answers
+almost nothing, so every assertion below that needs a real confidence signal
+skips there. The header used to claim the opposite -- "CI trains a small model
+first, so the guarantee is enforced there rather than being a test nobody ever
+runs" -- and three presence-gate guarantees skipped in every CI run for a
+fortnight on the strength of it, with the build green throughout.
+
+Two things now hold that claim honest:
+
+  * whether the gate is CONNECTED needs no weights at all and moved to
+    `test_presence_wiring.py`, which always runs;
+  * a `@pytest.mark.guarantee` test that skips FAILS the run unless the job
+    names its reason in `VEHICLE_ID_ALLOW_SKIPPED` (see `conftest.py`). The
+    engine job names "needs weights", so the skips below are declared rather
+    than silent.
+
+What is left here is ACCURACY, which genuinely needs weights and is measured by
+`scripts/eval_plates.py` and `scripts/eval_presence.py`.
 
 Note what these tests no longer import. They used to reach into the lane
 controller's decision logic to prove the fallback guarantee; now the guarantee
@@ -362,15 +380,19 @@ def test_a_noisy_feed_is_mostly_but_not_entirely_refused(clean_confidence):
     """A measured limitation, pinned so it cannot quietly get worse.
 
     This recogniser has NO rejection capability: it returns text for a flat
-    black image, and for uniform sensor noise it returns text on every frame at
-    a mean confidence of 0.83, with 2.3% of single frames clearing the measured
-    operating point. Confidence alone cannot tell a plate from snow.
+    black image, and for uniform sensor noise it returns text on every frame.
+    Confidence alone cannot tell a plate from snow.
 
-    Reading several captures helps, because noise reads differently every
-    frame and the batch then disagrees with itself -- measured at 0.7% for
-    three captures against 2.3% for one. It does not reach zero, and pretending
-    otherwise is the thing this project exists not to do. Rejecting an image
-    with no plate in it needs a detector, which is the next slice.
+    Reading several captures helps, because noise reads differently every frame
+    and the batch then disagrees with itself. **It does not reach zero**, and
+    pretending otherwise is the thing this project exists not to do.
+
+    The rates themselves are not typed here. They are measured by
+    `scripts/eval_presence.py` into `docs/measured/presence.json`, because a
+    figure that lives only in prose drifts: this docstring said 0.7% while the
+    README beside it said 0.3%, and nothing in the repository could tell you
+    which was measured. What is asserted here is the SHAPE -- that batching
+    helps and that the residual has not drifted upwards.
     """
     if clean_confidence < TRAINED:
         pytest.skip("needs weights that actually read plates confidently")
@@ -399,3 +421,128 @@ def test_a_noisy_feed_is_mostly_but_not_entirely_refused(clean_confidence):
         f"{rate:.1%} of noisy-feed reads answered confidently; the batch "
         "disagreement rule has stopped working"
     )
+
+
+@needs_weights
+@pytest.mark.guarantee
+def test_the_presence_gate_moves_the_noise_measurement(clean_confidence):
+    """D6. A detector that does not move the number is not evidence of anything.
+
+    Whether the gate is CONNECTED is proven in `test_presence_wiring.py` with no
+    weights at all. What this adds is the ACCURACY half, on a real recogniser:
+    handed a dead feed, does the gate actually stop the confident answers the
+    recogniser produces out of noise?
+
+    The rates are read from the evidence file rather than restated, and the
+    control is the ungated arm measured in the same run -- if it also answers
+    zero, this assertion proves nothing and says so.
+    """
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    import cv2 as _cv2
+    import numpy as np
+
+    from lanes import lane
+    from vehicle_id.presence import PresenceDetector
+
+    rng = np.random.default_rng(0)
+
+    def noise_capture():
+        image = rng.integers(0, 255, (160, 320, 3), dtype=np.uint8)
+        ok, buf = _cv2.imencode(".png", image)
+        assert ok
+        return Capture.now(buf.tobytes(), camera_id="dead-feed")
+
+    gated = PlateEngine(WEIGHTS, presence=PresenceDetector(reference=lane(90, seed=1)))
+    plain = PlateEngine(WEIGHTS)
+
+    reads = 150
+    batches = [[noise_capture() for _ in range(3)] for _ in range(reads)]
+
+    ungated_answers = sum(plain.read(batch).is_answer for batch in batches)
+    gated_answers = sum(gated.read(batch).is_answer for batch in batches)
+
+    # The control, measured here rather than assumed. On these weights the
+    # ungated arm answers between 1 and 5 times in 150; if it ever answers zero
+    # the gated assertion below is vacuous and must not be allowed to pass.
+    assert ungated_answers > 0, (
+        f"the ungated control answered 0/{reads} noisy reads, so the gated "
+        "assertion below would pass with the gate removed and proves nothing"
+    )
+    assert gated_answers == 0, (
+        f"{gated_answers}/{reads} noisy-feed reads got past the presence gate "
+        f"(ungated control: {ungated_answers}/{reads})"
+    )
+
+
+@needs_weights
+@pytest.mark.guarantee
+def test_the_gate_does_not_refuse_a_lane_with_a_vehicle_in_it(clean_confidence):
+    """The control that matters more. A gate that rejects everything would post
+    a perfect noise score and break the product.
+
+    Note what it does NOT assert: that a plate comes out. The gate is handed the
+    LANE view, which is what it is comparing against a reference of that lane
+    empty; this recogniser reads a plate-shaped crop. Asserting both here would
+    tie the gate's control to the recogniser's framing, and the first version
+    did exactly that -- it passed a bare plate crop against a flat black
+    "reference", which any gate admitting large changes passes, including one
+    that also admits a dead camera.
+    """
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    from lanes import lane, vehicle
+    from vehicle_id.presence import PresenceDetector
+
+    gated = PlateEngine(WEIGHTS, presence=PresenceDetector(reference=lane(90, seed=1)))
+    read = gated.read([as_capture(vehicle(420, 240, seed=40))])
+
+    assert read.presence is True, "the gate refused a lane with a vehicle in it"
+    assert read.presence_confidence is not None
+
+
+@needs_weights
+@pytest.mark.guarantee
+def test_a_caller_submitting_tight_plate_crops_is_not_measured_not_refused(clean_confidence):
+    """The framing the gate cannot serve, and the safe way for it to fail.
+
+    A caller replacing an LPR unit submits a crop around the plate, not a view
+    of the lane. There is no empty-lane background in such a frame, so occupancy
+    runs to the ceiling and presence is NOT MEASURED. That must be `null` -- the
+    old behaviour, a plate read normally -- and never `false`, which at the lane
+    would refuse every customer of every crop-submitting deployment.
+    """
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    from lanes import lane
+    from vehicle_id.presence import PresenceDetector
+
+    gated = PlateEngine(WEIGHTS, presence=PresenceDetector(reference=lane(90, seed=1)))
+    sample = PlateGenerator(seed=11).sample(degradation=0)
+    read = gated.read([as_capture(sample.image)])
+
+    assert read.presence is not False, (
+        "a tight plate crop was reported as an empty lane; every crop-submitting "
+        "deployment would refuse every customer"
+    )
+    assert read.presence is None
+    assert read.identity.plate, "a plate crop must still be read when presence is null"
+    assert read.is_answer
+
+
+@needs_weights
+@pytest.mark.guarantee
+def test_with_no_detector_presence_is_not_measured_and_nothing_changes(clean_confidence):
+    """A lane that has not configured a reference view must behave exactly as it
+    did before this stage existed."""
+    if clean_confidence < TRAINED:
+        pytest.skip("needs weights that actually read plates confidently")
+
+    engine = PlateEngine(WEIGHTS)
+    sample = PlateGenerator(seed=11).sample(degradation=0)
+    read = engine.read([as_capture(sample.image)])
+    assert read.presence is None
+    assert read.is_answer
