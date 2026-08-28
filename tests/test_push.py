@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import time
 
 import pytest
 
 from vehicle_id.contract import ANSWER, Engine, Identity, Read, utc_now
-from vehicle_id.push import ReadPusher, Refused
+from vehicle_id.push import QUEUE_FILE_MODE, ReadPusher, Refused
 
 
 def a_read(read_id: str) -> Read:
@@ -305,3 +307,103 @@ def test_settling_a_duplicate_read_id_removes_one_copy_not_both(tmp_path):
     remaining = p.queue.load()
     assert len(remaining) == 1, "both copies were removed; one was still owed"
     assert remaining[0].identity.plate == "CAR-B"
+
+
+# --- the queue's mode, across the ordinary life of the file -----------------
+
+
+def _mode(path) -> int:
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+@pytest.fixture
+def widest_umask():
+    """Run with a umask that grants everything.
+
+    The mode this test asserts must come from the code, not from whatever the
+    runner's umask happens to be. Under 0o000 every file this module creates
+    would be 0o666 unless something narrows it deliberately, so the fixture is
+    what gives the assertion its meaning.
+    """
+    previous = os.umask(0o000)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+@pytest.mark.guarantee
+def test_the_queue_is_owner_only_for_its_whole_life_not_only_when_created(tmp_path, widest_umask):
+    """The contract says the queue is protected as a credential is.
+
+    It was protected only until the first successful delivery. `settle()` --
+    the ordinary path after every delivery -- writes a sibling at the process
+    umask and renames it over the queue, so the mode set when the file was
+    created was undone by nothing more unusual than the thing working, and
+    never restored: subsequent appends saw a file that already existed.
+
+    Nothing here is torn, damaged or interrupted. This is the queue doing its
+    job, and the plates in it were world-readable from the first car onwards.
+    """
+    queue_path = tmp_path / "push-queue.jsonl"
+    consumer = Consumer()
+    pusher = ReadPusher("http://consumer.invalid/reads", queue_path, opener=consumer)
+
+    consumer.mode = "down"
+    pusher.submit(a_read("first"))
+    assert _mode(queue_path) & 0o077 == 0, "a queue holding plates is readable by others"
+    assert _mode(queue_path) == QUEUE_FILE_MODE
+
+    pusher.submit(a_read("second"))
+    assert _mode(queue_path) & 0o077 == 0
+
+    consumer.mode = "ok"
+    pusher.flush()
+    assert len(consumer.received) == 2, "the deliveries this test turns on did not happen"
+    assert _mode(queue_path) & 0o077 == 0, "delivery widened the queue's mode"
+    assert _mode(queue_path) == QUEUE_FILE_MODE
+
+    pusher.submit(a_read("third"))
+    assert _mode(queue_path) & 0o077 == 0, "the mode was never restored after the first delivery"
+    assert _mode(queue_path) == QUEUE_FILE_MODE
+
+
+@pytest.mark.guarantee
+def test_the_quarantine_file_is_owner_only_too(tmp_path, widest_umask):
+    """It holds the same lines the queue does, so it needs the same protection.
+    A torn line is quarantined verbatim -- plate and all."""
+    queue_path = tmp_path / "push-queue.jsonl"
+    pusher = ReadPusher("http://consumer.invalid/reads", queue_path, opener=Consumer())
+    pusher.queue.append(a_read("good"))
+    with queue_path.open("a", encoding="utf-8") as fh:
+        fh.write("{this line was torn by a power cut\n")
+
+    pusher.queue.load()
+
+    damaged = pusher.queue.damaged
+    assert damaged.exists(), "nothing was quarantined; this test proved nothing"
+    assert "torn by a power cut" in damaged.read_text(encoding="utf-8")
+    assert _mode(damaged) & 0o077 == 0, "the quarantine file is readable by others"
+    assert _mode(queue_path) & 0o077 == 0
+
+
+@pytest.mark.guarantee
+def test_a_queue_file_that_already_exists_is_narrowed_by_the_next_append(tmp_path, widest_umask):
+    """A queue can arrive from somewhere other than this code.
+
+    Restored from a backup, recreated by an operator with a text editor, left
+    behind by an older build. The mode was applied only when the file did not
+    previously exist, so every one of those cases appended plates to a file
+    nobody had narrowed. This is the case that reaches the append path with no
+    delivery anywhere near it.
+    """
+    queue_path = tmp_path / "push-queue.jsonl"
+    queue_path.write_text("", encoding="utf-8")
+    queue_path.chmod(0o666)
+    assert _mode(queue_path) & 0o077 != 0, "the fixture did not start wide; it proves nothing"
+
+    pusher = ReadPusher("http://consumer.invalid/reads", queue_path, opener=Consumer())
+    pusher.queue.append(a_read("into-a-file-someone-else-made"))
+
+    assert _mode(queue_path) & 0o077 == 0, "an existing queue file was never narrowed"
+    assert _mode(queue_path) == QUEUE_FILE_MODE
