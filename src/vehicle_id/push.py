@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 import threading
 import urllib.error
 import urllib.request
@@ -45,9 +46,84 @@ DEFAULT_TIMEOUT = 5.0
 #: rename later, so it is narrowed before the rename rather than after.
 QUEUE_FILE_MODE = 0o600
 
+#: The directory the queue lives in, and it is the half that actually gates the
+#: forgery path.
+#:
+#: The FILE's mode stops a stranger READING the plates in it. It does nothing
+#: about writing: a queue in a directory anyone can write to can be replaced,
+#: and a line written into it by hand is loaded, built into a `Read` and
+#: DELIVERED to the consumer as a genuine one -- no camera, no image, no engine.
+#: `_load_unlocked` trusts whatever JSON parses, deliberately, because the
+#: alternative is a service that dies at 2am over a torn line; that trust is
+#: only sound while the directory is the process's own.
+QUEUE_DIR_MODE = 0o700
+
 #: How often a pusher with something outstanding tries again on its own,
 #: rather than waiting for the next vehicle to arrive.
 DEFAULT_RETRY_INTERVAL = 15.0
+
+
+class QueueDirectoryUnsafe(Exception):
+    """The queue directory is writable by somebody else, or owned by them.
+
+    Raised at construction, which is before the port opens, because a service
+    that starts and then delivers forged reads is worse than one that does not
+    start. There is no flag that turns this off: the fix is to narrow the
+    directory or point the queue somewhere the service owns.
+    """
+
+
+def queue_directory_fault(mode: int, owner_uid: int, process_uid: int) -> str | None:
+    """Why this directory is not safe to hold a queue, or None if it is.
+
+    Separated from the syscalls deliberately. Handing a directory to another
+    user needs root, so the ownership branch cannot be exercised by creating
+    one -- and an untested branch in a security check is the branch that turns
+    out to have been `if False:` all along. This is the decision; the function
+    below is the plumbing around it.
+
+    Ownership is checked FIRST. A directory somebody else owns is theirs to
+    chmod back whenever they like, so a narrow mode on it proves nothing.
+    """
+    if owner_uid != process_uid:
+        return (
+            f"it is owned by uid {owner_uid}, not by this process (uid {process_uid}). A queue "
+            "directory somebody else owns is a queue somebody else can write a read into, and "
+            "a hand-written line is delivered as genuine."
+        )
+    if mode & 0o077:
+        return (
+            f"it is mode {mode:04o}, which is wider than {QUEUE_DIR_MODE:04o}. Anything that "
+            "can write this directory can put a plate into a consumer's stream."
+        )
+    return None
+
+
+def ensure_queue_directory(directory: Path) -> None:
+    """Create the queue directory narrow, or refuse a directory that is not.
+
+    Created and then chmodded, rather than relying on `mkdir`'s mode:
+    `parents=True` creates every INTERMEDIATE directory at the default mode
+    whatever `mode` says, and a bare `mkdir()` leaves even the leaf to the
+    process umask -- 0755 under the usual 022 and 0777 under a permissive one.
+    The chmod makes the leaf exact rather than a function of how the service
+    happened to be started.
+    """
+    if not directory.exists():
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(QUEUE_DIR_MODE)
+        return
+
+    if not directory.is_dir():
+        raise QueueDirectoryUnsafe(f"{directory} exists and is not a directory")
+
+    info = directory.stat()
+    fault = queue_directory_fault(stat.S_IMODE(info.st_mode), info.st_uid, os.getuid())
+    if fault is not None:
+        raise QueueDirectoryUnsafe(
+            f"refusing to use {directory} as a queue directory: {fault} "
+            f"Run: chmod {QUEUE_DIR_MODE:04o} {directory}"
+        )
 
 
 @dataclass
@@ -83,7 +159,8 @@ class ReadQueue:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Before anything is written, and before the service opens a port.
+        ensure_queue_directory(self.path.parent)
         #: Lines this build could not read, kept rather than dropped.
         self.damaged = self.path.with_suffix(self.path.suffix + ".damaged")
         self._damaged_count = 0
