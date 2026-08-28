@@ -233,9 +233,7 @@ occludes the tarmac's texture, and that is what is measured now.
 `true`, `false`, `null`. `false` is a **measurement** — the lane is visible, it
 matches the reference, and there is nothing on it — and it is the only value
 that ends a transaction before it starts. So it is the only one the gate will
-say from a measurement it actually has. Everything it cannot see is `null`, and
-`null` puts the lane back to the behaviour it had before this stage existed: a
-ticket and a human.
+say from a measurement it actually has.
 
 The first version of this gate did not hold that line. It measured raw intensity
 against the reference and called any large contiguous change a vehicle, so a
