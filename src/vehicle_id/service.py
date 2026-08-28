@@ -10,6 +10,15 @@ identification path -- the engine has to identify with the internet down, so it
 binds to loopback by default and is meant to run on the same device or the same
 LAN as whatever consumes it.
 
+**And a bind off loopback needs a credential.** `--host` was one flag from the
+LAN with nothing behind it: anything that could reach the port could POST a
+capture and have the record it produced delivered to the consumer as a genuine
+read, carrying an attacker-chosen `camera_id`. That route needs no camera and
+no vehicle, so no amount of camera work closes it. `make_server` now REFUSES a
+non-loopback bind unless a shared token is configured, and with a token every
+read route requires it. Loopback with no token is unchanged, which is every
+deployment that exists.
+
 Four routes, and each exists because a different kind of consumer needs it:
 
     POST /v1/reads          submit captures, get the READ back   (synchronous)
@@ -28,6 +37,8 @@ patched, and nothing here needs more than the standard library provides.
 from __future__ import annotations
 
 import base64
+import hmac
+import ipaddress
 import json
 import logging
 import threading
@@ -53,6 +64,60 @@ log = logging.getLogger(__name__)
 DEFAULT_HISTORY = 256
 
 MAX_BODY_BYTES = 32 * 1024 * 1024
+
+
+class InsecureBind(Exception):
+    """A bind that would expose reads to a network with nothing in front of them.
+
+    Raised before the socket is created. A service that starts and then serves
+    plates to whoever asks is worse than one that does not start, and this is
+    the only moment at which the decision is still cheap.
+    """
+
+
+def is_loopback(host: str) -> bool:
+    """Whether binding to `host` keeps the service on this machine.
+
+    Anything this cannot PROVE is loopback counts as not loopback. A hostname
+    resolves at bind time, can resolve to more than one address, and can change
+    under the service -- so guessing here would mean guessing in the safe
+    direction on the one question that decides whether a credential is
+    required. `''` is every interface and is the widest of the lot.
+    """
+    if host in ("localhost", "localhost.localdomain"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def assert_bind_allowed(host: str, port: int, token: str | None) -> None:
+    """Raise unless this host may be bound with this credential.
+
+    One implementation, called by `make_server` -- so the rule holds for every
+    caller of this package -- and by the CLI BEFORE it builds an engine, so a
+    misconfiguration is reported in the moment rather than after a model has
+    loaded, and so a missing weights file cannot mask it.
+    """
+    if is_loopback(host) or token:
+        return
+    raise InsecureBind(
+        f"refusing to bind {host or 'every interface'}:{port} with no token. Off loopback "
+        "anything that can reach this port can submit a capture and have the record it "
+        "produces delivered to the consumer as a genuine read, with a camera_id it chose. "
+        "Configure a shared token with --auth-token-file, or bind 127.0.0.1."
+    )
+
+
+def bearer(header: str | None) -> str | None:
+    """The token out of an Authorization header, or None if there is not one."""
+    if not header:
+        return None
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "bearer" or not value.strip():
+        return None
+    return value.strip()
 
 
 class ReadStore:
@@ -175,6 +240,9 @@ class VehicleIdService:
 
 class _Handler(BaseHTTPRequestHandler):
     service: VehicleIdService
+    #: None means no credential is configured, which is the loopback default
+    #: and changes nothing. A string means every read route requires it.
+    token: str | None = None
 
     server_version = "openparking-vehicle-id"
     sys_version = ""
@@ -188,10 +256,41 @@ class _Handler(BaseHTTPRequestHandler):
 
     # --- routes ----------------------------------------------------------
 
+    def _authorised(self) -> bool:
+        """Compared in constant time, because a token is a secret.
+
+        `hmac.compare_digest` and not `==`: the ordinary comparison returns as
+        soon as two bytes differ, and that timing is enough to recover a token
+        one character at a time from a machine on the same LAN -- which is
+        exactly the machine this credential exists to keep out.
+        """
+        if self.token is None:
+            return True
+        presented = bearer(self.headers.get("Authorization"))
+        return presented is not None and hmac.compare_digest(presented, self.token)
+
+    def _unauthorised(self) -> None:
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", "Bearer")
+        body = json.dumps({"error": "a bearer token is required for this route"}).encode("utf-8")
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self) -> None:  # noqa: N802  (http.server's spelling)
         url = urlparse(self.path)
+        # Health carries no plate and no image, and a monitor that has to hold
+        # the read credential to ask whether the process is alive is a
+        # credential in one more place. Every route that can emit a read is
+        # behind the token; this one is not.
         if url.path == "/v1/health":
             return self._json(200, self.service.health())
+
+        # The pull routes are where plates LEAVE this service, so a token that
+        # guarded the POST and not these would guard nothing.
+        if not self._authorised():
+            return self._unauthorised()
 
         if url.path == "/v1/reads/last":
             latest = self.service.store.last()
@@ -227,6 +326,11 @@ class _Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path != "/v1/reads":
             return self._json(404, {"error": "no such route"})
+
+        # Before the body is read, before the engine runs, and before anything
+        # reaches the store or the push queue.
+        if not self._authorised():
+            return self._unauthorised()
 
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -335,11 +439,22 @@ def _captures_from(
     )
 
 
-def make_server(service: VehicleIdService, host: str = "127.0.0.1", port: int = 8088):
+def make_server(
+    service: VehicleIdService,
+    host: str = "127.0.0.1",
+    port: int = 8088,
+    token: str | None = None,
+):
     """Bound to loopback by default. Exposing it is a deployment decision.
 
     D7 says the identification path is local. Defaulting to 0.0.0.0 would make
     reaching across a network the easy accident rather than the deliberate act.
+
+    And a deliberate act is still not a safe one on its own: off loopback this
+    REFUSES to build a server unless a token is configured. The refusal is here
+    rather than in the CLI so it holds for every caller of this package, not
+    only for the one that types the flag.
     """
-    handler = type("_BoundHandler", (_Handler,), {"service": service})
+    assert_bind_allowed(host, port, token)
+    handler = type("_BoundHandler", (_Handler,), {"service": service, "token": token or None})
     return ThreadingHTTPServer((host, port), handler)

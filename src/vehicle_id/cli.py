@@ -10,6 +10,9 @@ integration.
     vehicle-id serve                    the local service on 127.0.0.1:8088
 
 `serve --push-to URL` turns on push delivery to a consumer.
+
+`serve --host` off loopback REQUIRES `--auth-token-file`, and the service
+refuses to start without it.
 """
 
 from __future__ import annotations
@@ -76,8 +79,24 @@ def build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve", help="run the local service")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8088)
+    serve.add_argument(
+        "--auth-token-file",
+        type=Path,
+        help="a file holding the shared token every read route must carry. Required "
+             "for any --host that is not loopback; ignored by nothing. A FILE and "
+             "not a value, because a value on the command line is readable by "
+             "every user on the box for as long as the process runs",
+    )
     serve.add_argument("--push-to", help="POST every read to this URL as it happens")
-    serve.add_argument("--queue", type=Path, default=Path("var/push-queue.jsonl"))
+    serve.add_argument(
+        "--queue",
+        type=Path,
+        help="where reads wait until the consumer has them. Required with --push-to, and it "
+             "must be an ABSOLUTE path: a relative one resolves against whatever directory "
+             "the service was started in, so the security of the queue would depend on the "
+             "caller's shell. The directory and every ancestor of it are checked before the "
+             "port opens",
+    )
     _add_engine_args(serve)
 
     return parser
@@ -178,18 +197,63 @@ def cmd_read(args) -> int:
     return 0
 
 
+def _token(args) -> str | None:
+    """The shared token, read from the file that holds it.
+
+    An empty or whitespace-only file is not a token and is refused rather than
+    read as "no token configured" -- which would be a truncated file silently
+    turning the credential off on the one bind that requires one.
+    """
+    if not args.auth_token_file:
+        return None
+    try:
+        raw = args.auth_token_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"could not read {args.auth_token_file}: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    token = raw.strip()
+    if not token:
+        print(f"{args.auth_token_file} holds no token", file=sys.stderr)
+        raise SystemExit(2)
+    return token
+
+
 def cmd_serve(args) -> int:
-    from .push import ReadPusher
-    from .service import VehicleIdService, make_server
+    from .push import QueueDirectoryUnsafe, ReadPusher
+    from .service import InsecureBind, VehicleIdService, assert_bind_allowed, make_server
+
+    # Both refusals BEFORE the engine is built. A configuration no weights file
+    # would fix should be said in the moment, not after a model has loaded --
+    # and an engine that fails to start for its own reasons must not be able to
+    # mask the reason the bind was going to be refused anyway.
+    token = _token(args)
+    try:
+        assert_bind_allowed(args.host, args.port, token)
+        if args.push_to and args.queue is None:
+            # No default, and deliberately not one. The default used to be
+            # `var/push-queue.jsonl` -- a relative path, so which directory held
+            # the plates was decided by wherever the service happened to be
+            # started, and nothing recorded which that was.
+            raise QueueDirectoryUnsafe(
+                "--push-to needs --queue, and it must be an absolute path: reads wait on disk "
+                "until the consumer has them, and a queue anyone can write is a queue anyone "
+                "can put a plate into."
+            )
+        pusher = ReadPusher(args.push_to, args.queue) if args.push_to else None
+    except (InsecureBind, QueueDirectoryUnsafe) as exc:
+        print(f"\n{exc}\n", file=sys.stderr)
+        return 2
 
     engine = _engine(args)
     if engine is None:
         return 2
-    pusher = ReadPusher(args.push_to, args.queue) if args.push_to else None
     service = VehicleIdService(engine, pusher=pusher)
-    server = make_server(service, host=args.host, port=args.port)
+    server = make_server(service, host=args.host, port=args.port, token=token)
 
-    print(f"vehicle-id on http://{args.host}:{args.port}  (local only by design)")
+    reach = "local only by design" if args.host in ("127.0.0.1", "::1", "localhost") else "EXPOSED"
+    print(f"vehicle-id on http://{args.host}:{args.port}  ({reach})")
+    if args.auth_token_file:
+        print("  every read route requires the bearer token")
     print(f"  engine {engine.engine.name} {engine.engine.version}")
     print(f"  weights {engine.engine.weights_id}   operating point {engine.threshold:.3f}")
     if pusher:
