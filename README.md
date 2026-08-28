@@ -78,14 +78,13 @@ vehicle-id serve --push-to http://your-system.local/reads
 | `GET /v1/health` | engine, version, weights digest, operating point, push state — `degraded` when a read was lost |
 | push | every record POSTed to your URL as it happens, with a durable local queue |
 
-Push never loses a record: it is written to disk **before** delivery is
-attempted and removed only once you have acknowledged it. Re-sends are therefore
-normal — `read_id` is stable across attempts, and you are expected to
-deduplicate on it. A `4xx` from you is treated as a refusal and dropped rather
-than retried forever, because retrying poison blocks everything behind it.
-Anything outstanding when the process stopped is delivered at startup, before
-the first vehicle of the day, and retried on a timer rather than waiting for
-the next car.
+A record is written to disk **before** delivery is attempted and removed only
+once you have acknowledged it. Re-sends are therefore normal — `read_id` is
+stable across attempts, and you are expected to deduplicate on it. A `4xx` from
+you is treated as a refusal and dropped rather than retried forever, because
+retrying poison blocks everything behind it. Anything outstanding when the
+process stopped is delivered at startup, before the first vehicle of the day,
+and retried on a timer rather than waiting for the next car.
 
 Send `request_id`, or an `Idempotency-Key` header, and a re-sent submission
 returns the same record instead of becoming a second vehicle.
