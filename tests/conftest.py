@@ -38,6 +38,7 @@ GUARANTEE_MODULES = (
     "test_contract.py",
     "test_measured_docs.py",
     "test_plates.py",
+    "test_push.py",
 )
 
 _skipped: list[tuple[str, str]] = []

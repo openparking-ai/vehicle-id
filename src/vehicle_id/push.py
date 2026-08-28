@@ -34,6 +34,17 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 5.0
 
+#: The queue holds plates. It is trusted local state and it is the process's
+#: own; nothing else has business reading it.
+#:
+#: Applied on every write and not only at creation, because the queue file is
+#: REPLACED by a sibling on the ordinary post-delivery path -- so a mode set
+#: once, when the file was first made, was undone by the first successful
+#: delivery and never restored. The siblings carry it too: the quarantine file
+#: holds the same lines the queue does, and the scratch file IS the queue one
+#: rename later, so it is narrowed before the rename rather than after.
+QUEUE_FILE_MODE = 0o600
+
 #: How often a pusher with something outstanding tries again on its own,
 #: rather than waiting for the next vehicle to arrive.
 DEFAULT_RETRY_INTERVAL = 15.0
@@ -84,15 +95,11 @@ class ReadQueue:
 
     def append(self, read: Read) -> None:
         with self._lock:
-            new = not self.path.exists()
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(read.to_dict()) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
-            if new:
-                # The queue holds plates. It is trusted local state and it is
-                # the process's own; nothing else has business reading it.
-                self.path.chmod(0o600)
+            self.path.chmod(QUEUE_FILE_MODE)
 
     def load(self) -> list[Read]:
         with self._lock:
@@ -125,6 +132,7 @@ class ReadQueue:
             # often the queue happened to be read.
             with self.damaged.open("a", encoding="utf-8") as fh:
                 fh.write("\n".join(damaged) + "\n")
+            self.damaged.chmod(QUEUE_FILE_MODE)
             self._damaged_count += len(damaged)
             self._write_unlocked(reads)
         return reads
@@ -135,6 +143,11 @@ class ReadQueue:
             for read in reads:
                 fh.write(json.dumps(read.to_dict()) + "\n")
             fh.flush()
+        # Narrowed BEFORE the rename. The scratch file becomes the queue, so
+        # doing it afterwards would leave a window in which the queue is
+        # readable by anyone -- and an interruption inside that window would
+        # leave it that way for good.
+        scratch.chmod(QUEUE_FILE_MODE)
         # Written to a sibling then moved, so an interruption leaves either the
         # old queue or the new one and never a half-written file.
         scratch.replace(self.path)
