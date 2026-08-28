@@ -1,4 +1,4 @@
-"""Push delivery: every read reaches the consumer, or waits on disk until it can.
+"""Push delivery.
 
 The design rule is the one the lane controller already learned the hard way: a
 consumer being down must never lose a read. So a read is written to a durable
