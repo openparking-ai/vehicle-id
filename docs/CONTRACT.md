@@ -336,14 +336,31 @@ Three things this release does NOT do, stated rather than left to be discovered:
   a `false` that would refuse every customer of every crop-submitting
   deployment.
 
-- **The service is not authenticated.** Anything that can reach the port can
-  submit captures and read records, and a consumer cannot tell this engine from
-  another process that bound the port first. Keep it on loopback, or on a
-  segment you control. Do not expose it.
-- **The push queue is trusted local state.** It is a plain file, created `0600`,
-  and whatever is in it is delivered. Anything that can write to it can put a
-  record of its choosing in front of your consumer. Protect it as you would a
-  credential.
+- **On loopback the service is not authenticated.** Anything on this machine
+  that can reach the port can submit captures and read records, and a consumer
+  cannot tell this engine from another process that bound the port first.
+- **Off loopback it refuses to start without a shared token.** `--host`
+  anything but loopback requires `--auth-token-file`, and with a token every
+  read route — `POST /v1/reads`, `GET /v1/reads`, `GET /v1/reads/last` —
+  requires `Authorization: Bearer <token>` and answers `401` without it.
+  `GET /v1/health` stays open: it carries no plate and no image, and a monitor
+  that must hold the read credential to ask whether the process is alive is
+  that credential in one more place.
+- **The token is read from a FILE, never from a flag value.** A value on the
+  command line is readable by every user on the box for as long as the process
+  runs.
+- **The push queue is trusted local state, and the DIRECTORY is what makes that
+  sound.** The queue is a plain file, created `0600`, and whatever is in it is
+  delivered — a line written into it by hand is loaded, built into a record and
+  delivered as a genuine read. So the service creates its queue directory
+  `0700` and REFUSES to start unless the directory AND EVERY ANCESTOR OF IT is
+  safe: the directory owned by this process and no wider than `0700`, each
+  ancestor owned by this process or by root and writable by nobody else. The
+  leaf alone is not enough — a perfect `0700` directory under a parent anyone
+  can write can be renamed aside and replaced, and every load re-opens by path.
+  A relative `--queue` is refused outright, because it resolves against whatever
+  directory the service was started in. There is no flag that turns any of that
+  off.
 
 ## What presence is measured to do, and what it is measured NOT to do
 

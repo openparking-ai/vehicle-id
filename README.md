@@ -90,8 +90,20 @@ the next car.
 Send `request_id`, or an `Idempotency-Key` header, and a re-sent submission
 returns the same record instead of becoming a second vehicle.
 
-**The service is not authenticated and the queue file is trusted local state.**
-Keep both where you would keep a credential — see
+**On loopback the service is not authenticated**, which is what it is for and
+what every deployment gets. **Off loopback it refuses to start without a shared
+token** — `--host` was one flag from the LAN with nothing behind it, and
+anything that could reach the port could have a record of its choosing
+delivered to your consumer as a genuine read. With `--auth-token-file`, every
+read route requires that token; `/v1/health` stays open because it carries no
+read.
+
+**The queue directory is the process's own**, created `0700`, and so is every
+ancestor of it: the service refuses to start on a directory that is wider or
+somebody else's, and on one whose parents anyone can write — a perfect `0700`
+directory under a writable parent can be renamed aside and replaced. `--queue`
+must be an absolute path. The file's mode says who may READ the plates in it;
+the directory and its parents say who may write a record into it. See
 [docs/CONTRACT.md](docs/CONTRACT.md).
 
 The full record, its field-by-field meaning and the compatibility rules are in
