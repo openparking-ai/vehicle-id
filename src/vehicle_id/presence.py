@@ -91,8 +91,6 @@ ground the reference describes, and nothing is standing on it". Note the middle
 clause: it is what the measurement establishes, and it is weaker than "there is
 nothing there". That is the only claim that ends a transaction before it starts,
 so it is the only one this module will make from a measurement it actually has.
-Everything else is `None`, which puts the lane back to the behaviour it had
-before this stage existed: a ticket and a human.
 
 **Illumination is cancelled, not measured.** The comparison fits a global gain
 and offset between the reference and the capture before comparing, so the
@@ -274,7 +272,7 @@ KNOWN_LIMITS = (
     "a bright enough headlight pool on the floor reads as occupied before the "
     "car that cast it is in frame",
     "no scene measured has produced `false` for a frame with a vehicle in it; "
-    "where it fails, it fails to null -- a ticket and a human",
+    "where it fails, it fails to null",
     CAMERA_FAULTS_CAVEAT,
 )
 

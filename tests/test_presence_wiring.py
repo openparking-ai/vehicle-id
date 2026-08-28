@@ -166,8 +166,7 @@ def test_a_dead_camera_reads_nothing_and_claims_nothing(gate, level):
 
 
 def test_a_camera_fault_is_not_reported_as_an_empty_lane(gate):
-    """The distinction the lane acts on. `false` ends the transaction; `null`
-    sends it to a human. A dead camera must produce the second."""
+    """The distinction the lane acts on. `false` ends the transaction."""
     engine = engine_with(gate, StubRecognizer())
     assert engine.read([capture(flat(0))]).presence is not False
 
