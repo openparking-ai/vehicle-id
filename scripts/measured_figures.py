@@ -380,7 +380,7 @@ def _separation_admissions(evidence: dict) -> str:
         "ground's exact luminance, where the vehicle and the ground it stands on are "
         f"the same brightness. {refusal} In the remaining {unmeasured} presence is "
         f"`null` and the gate reports a camera fault: {named}. A cell that is not "
-        "measured is not a refusal — the lane falls back to a ticket and a human — "
+        "measured is not a refusal — "
         "but it is a frame with a car in it that this gate answered nothing about, "
         "and the reason it gave names equipment."
     )
@@ -609,8 +609,7 @@ def _safety_counts(evidence: dict) -> str:
         f"**The one thing that holds everywhere measured.** {refusals} wrongful "
         f"refusals in {total} scenes containing a vehicle: {counted}. `false` is the "
         "only value that ends a transaction, and no scene measured produced it for a "
-        "frame with a vehicle in it. Where this gate fails it fails to `null` — a "
-        "ticket and a human."
+        "frame with a vehicle in it. Where this gate fails it fails to `null`."
     )
 
 
