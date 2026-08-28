@@ -98,10 +98,13 @@ delivered to your consumer as a genuine read. With `--auth-token-file`, every
 read route requires that token; `/v1/health` stays open because it carries no
 read.
 
-**The queue directory is the process's own**, created `0700`, and the service
-refuses to start on one that is wider or owned by somebody else — the file's
-mode says who may READ the plates in it, and the directory is what says who may
-write a record into it. See [docs/CONTRACT.md](docs/CONTRACT.md).
+**The queue directory is the process's own**, created `0700`, and so is every
+ancestor of it: the service refuses to start on a directory that is wider or
+somebody else's, and on one whose parents anyone can write — a perfect `0700`
+directory under a writable parent can be renamed aside and replaced. `--queue`
+must be an absolute path. The file's mode says who may READ the plates in it;
+the directory and its parents say who may write a record into it. See
+[docs/CONTRACT.md](docs/CONTRACT.md).
 
 The full record, its field-by-field meaning and the compatibility rules are in
 [docs/CONTRACT.md](docs/CONTRACT.md).

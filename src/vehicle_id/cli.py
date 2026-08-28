@@ -88,7 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
              "every user on the box for as long as the process runs",
     )
     serve.add_argument("--push-to", help="POST every read to this URL as it happens")
-    serve.add_argument("--queue", type=Path, default=Path("var/push-queue.jsonl"))
+    serve.add_argument(
+        "--queue",
+        type=Path,
+        help="where reads wait until the consumer has them. Required with --push-to, and it "
+             "must be an ABSOLUTE path: a relative one resolves against whatever directory "
+             "the service was started in, so the security of the queue would depend on the "
+             "caller's shell. The directory and every ancestor of it are checked before the "
+             "port opens",
+    )
     _add_engine_args(serve)
 
     return parser
@@ -221,6 +229,16 @@ def cmd_serve(args) -> int:
     token = _token(args)
     try:
         assert_bind_allowed(args.host, args.port, token)
+        if args.push_to and args.queue is None:
+            # No default, and deliberately not one. The default used to be
+            # `var/push-queue.jsonl` -- a relative path, so which directory held
+            # the plates was decided by wherever the service happened to be
+            # started, and nothing recorded which that was.
+            raise QueueDirectoryUnsafe(
+                "--push-to needs --queue, and it must be an absolute path: reads wait on disk "
+                "until the consumer has them, and a queue anyone can write is a queue anyone "
+                "can put a plate into."
+            )
         pusher = ReadPusher(args.push_to, args.queue) if args.push_to else None
     except (InsecureBind, QueueDirectoryUnsafe) as exc:
         print(f"\n{exc}\n", file=sys.stderr)
