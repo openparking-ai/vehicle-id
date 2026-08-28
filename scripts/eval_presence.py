@@ -331,9 +331,9 @@ def headlights(detector, amounts=HEADLIGHT_LEVELS, ambient: float = 90) -> dict:
     `lane()` clips to uint8 after the pool multiplies, so saturation and
     therefore the boundary move with the level. It was previously pinned at 90
     inside the body, where nothing published it. `ambient_levels_swept` is
-    counted from the rows rather than typed, so the claim that the dependence is
-    NOT MEASURED branches on a value and stops being true on its own the day a
-    second level is swept.
+    counted from the rows rather than typed. It is a count of how many levels
+    THIS run swept, and nothing more: one caller passes one `ambient`, so it is
+    1 by construction, and no document branches on it.
     """
     sweep = []
     for amount in amounts:

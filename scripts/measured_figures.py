@@ -572,36 +572,6 @@ def _headlight_boundary(evidence: dict) -> str:
     )
 
 
-def _headlight_ambient(evidence: dict) -> str:
-    """G1. The condition the boundary was measured under, attached to it.
-
-    The boundary is not a property of the gate: `lane()` clips to 8 bits after
-    the beam pool multiplies, so how much of the frame saturates — and where the
-    boundary falls — moves with the ambient level. Deleting the number was tried
-    and is not a deletion, because the table publishes it row by row. So the
-    condition travels with it, and the not-measured claim branches on the COUNT
-    of levels swept rather than being a fixed string.
-    """
-    swept = at(evidence, "headlight.ambient_levels_swept")
-    level = at(evidence, "headlight.ambient_level")
-    if swept > 1:
-        return (
-            f"**That boundary was measured at {swept} ambient levels.** Where it "
-            "falls at each is in the table above; the dependence on ambient light "
-            "is measured, not assumed."
-        )
-    return (
-        f"**That boundary is a property of this sweep, not of the gate.** It was "
-        f"measured at {swept} ambient level — {level:g} — and it MOVES with that "
-        "level: the lane is clipped to 8 bits after the pool multiplies, so how "
-        "much of the frame saturates, and therefore where the boundary falls, "
-        "depends on how bright the lane was to begin with. **How it moves is NOT "
-        "MEASURED**, and the level the reference is captured at is a fixture "
-        "choice nothing has measured either. Read the number as: this is what "
-        "happened at this one level."
-    )
-
-
 def _headlight_scope(evidence: dict) -> str:
     refusals = at(evidence, "headlight.vehicle_refusals")
     cells = at(evidence, "headlight.vehicle_cells")
@@ -705,51 +675,44 @@ def _conflation_ordinary_arrival(evidence: dict) -> str:
     that measured it, and the frequency at a real entry is stated as unmeasured,
     because it is.
 
-    EVERY affected cell is described, and that is the fix, not a flourish. This
-    used to take `affected[0]` and render its coordinates as the whole finding:
-    "2 of the 108 cells ... at contrast 2.05 and surface grain 0", where the two
-    cells are at surface grain 0 AND 0.02. One cell's coordinates presented as
-    describing two.
+    THE CELL COORDINATES ARE DELETED, and the deletion is the item. They named a
+    beam pool with no ambient level beside it, and the level a pool means
+    anything at is pinned in `matrix()` and `separation()` by a constant no
+    evidence value records — so the condition could not be attached from a value
+    that already exists, and attaching it from the HEADLIGHT sweep's level would
+    be one measurement's number describing another's cells. The conclusion is
+    what this paragraph is for and it does not need the coordinates; the row
+    they fall in is in the separation table above, and the count below is read
+    from the same rows.
     """
     rows = _rows(evidence)
     cells = sum(row["cells"] for _, row in rows)
     affected = [
-        (label, cell)
-        for label, row in rows
+        cell
+        for _, row in rows
         for cell in row["vehicle_not_measured_cells"]
     ]
     if not affected:
         return ""
     real = _synthetic(evidence)
-    fractions = sorted({cell["vehicle_frame_fraction"] for _, cell in affected})
+    fractions = sorted({cell["vehicle_frame_fraction"] for cell in affected})
     size = (
         f"{fractions[0]:.0%}"
         if len(fractions) == 1
         else f"{fractions[0]:.0%} to {fractions[-1]:.0%}"
     )
     named = ", ".join(
-        f"`{health}`" for health in sorted({cell["camera_health"] for _, cell in affected})
-    )
-    grouped: dict[str, list[dict]] = {}
-    for label, cell in affected:
-        grouped.setdefault(label, []).append(cell)
-    where = "; ".join(
-        f"{label} — "
-        + ", ".join(
-            f"contrast {cell['contrast']:g} / surface grain {cell['surface']:g}"
-            for cell in group
-        )
-        for label, group in grouped.items()
+        f"`{health}`" for health in sorted({cell["camera_health"] for cell in affected})
     )
     return (
         f"**One of those conditions is a car arriving.** {len(affected)} of the "
         f"{cells} separation-matrix cells put an ordinary vehicle — {size} of the "
         f"frame, not one filling it — in front of the camera and got {named} back. "
-        f"Each of those cells, in full: {where}. The gate counts that under "
-        "`camera_faults`, so an arriving car pages a technician about a working "
-        f"camera. {real}: how often a real entry lands in one of these "
-        "configurations is not known, and these are drawn rectangles. What is known "
-        "is that the reason cannot be read as equipment on its own."
+        "The gate counts that under `camera_faults`, so an arriving car pages a "
+        f"technician about a working camera. {real}: how often a real entry lands "
+        "in one of these configurations is not known, and these are drawn "
+        "rectangles. What is known is that the reason cannot be read as equipment "
+        "on its own."
     )
 
 
@@ -830,10 +793,6 @@ BLOCKS: dict[str, tuple[Claim, ...]] = {
                 "headlight.ambient_level",
             ),
             _headlight_boundary,
-        ),
-        Claim(
-            ("headlight.ambient_levels_swept", "headlight.ambient_level"),
-            _headlight_ambient,
         ),
         Claim(
             (

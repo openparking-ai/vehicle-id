@@ -149,16 +149,13 @@ def lane(
     **The axis is NOT scale-free, and two earlier claims here that it was are
     deleted rather than repaired.** `_beam` multiplies, but this function clips
     to uint8 afterwards, and saturation is what destroys the structure the
-    measure reads: at `level=90` a pool of 8 saturates 65.9% of the frame and at
-    `level=30` it saturates 9.8%. So `level` decides where a pool stops being
-    tolerated -- x3 ambient at level 90, x6 at 60, x8 at 45, never within this
-    sweep at 30 -- and `level=90` is an unmeasured fixture pin that the
-    published boundary depends on. It is pinned because the reference is
-    captured there, not because anything measured a real entry; the deleted
-    lighting claim justified THIS parameter, never the ambient pin. Crossing the
-    two axes is January's work with real footage, so the dependence is stated
-    and NOT MEASURED. Where it is published, the ambient level is published
-    beside it.
+    measure reads. So `level` decides where a pool stops being tolerated, and
+    `level=90` is an unmeasured fixture pin that the published boundary depends
+    on. It is pinned because the reference is captured there, not because
+    anything measured a real entry; the deleted lighting claim justified THIS
+    parameter, never the ambient pin. Crossing the two axes is January's work
+    with real footage, so the dependence is stated and NOT MEASURED. Where it is
+    published, the ambient level is published beside it.
 
     A car with its beams on throws them into frame BEFORE the car itself
     arrives -- a large scene change caused by a vehicle that is not yet the
