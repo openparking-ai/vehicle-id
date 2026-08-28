@@ -24,6 +24,7 @@ import stat
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -318,3 +319,139 @@ def test_a_path_that_is_not_a_directory_is_refused(tmp_path):
     not_a_directory.write_text("")
     with pytest.raises(QueueDirectoryUnsafe, match="not a directory"):
         ensure_queue_directory(not_a_directory)
+
+
+# --- the leaf is not the path ----------------------------------------------
+
+
+@pytest.mark.guarantee
+def test_the_ancestor_decision_trusts_root_and_refuses_a_writable_component():
+    """The decision for an ANCESTOR, both sides of both branches.
+
+    It is weaker than the leaf's in exactly two places, and each is forced.
+    Every path ends at `/`, which is root-owned everywhere, so requiring each
+    component to belong to this process refuses every path there is. And `/`,
+    `/var` and `/private` are 0755 everywhere, so requiring 0700 of each
+    component does the same. What an ancestor may not be is WRITABLE by anyone
+    else -- that is the bit that lets a stranger rename the queue aside.
+    """
+    ancestor = dict(process_uid=501, leaf=False)
+    assert queue_directory_fault(0o755, owner_uid=0, **ancestor) is None
+    assert queue_directory_fault(0o755, owner_uid=501, **ancestor) is None
+    assert queue_directory_fault(0o775, owner_uid=501, **ancestor) is not None
+    assert queue_directory_fault(0o757, owner_uid=0, **ancestor) is not None
+    assert queue_directory_fault(0o755, owner_uid=502, **ancestor) is not None
+
+    # The control on the parameter itself: the same three values that an
+    # ancestor may hold are refused for the LEAF, so `leaf=False` is doing
+    # something rather than being an argument nothing reads.
+    assert queue_directory_fault(0o755, owner_uid=0, process_uid=501) is not None
+    assert queue_directory_fault(0o755, owner_uid=501, process_uid=501) is not None
+
+
+@pytest.mark.guarantee
+def test_a_sticky_world_writable_ancestor_is_accepted_and_a_plain_one_is_not():
+    """`/tmp` is 1777 on every system there is, and the sticky bit is the rule
+    this check actually needs: only the owner of an entry may rename or remove
+    it, so a stranger cannot swap the queue directory out. Refusing it would
+    reject every path under /tmp and answer with `chmod go-w /tmp`, which is
+    worse advice than the check is protection. The pair is the point -- the
+    same mode without the bit is still refused."""
+    ancestor = dict(owner_uid=0, process_uid=501, leaf=False)
+    assert queue_directory_fault(0o1777, **ancestor) is None
+    assert queue_directory_fault(0o777, **ancestor) is not None
+    # And it buys an ANCESTOR nothing at the leaf: the plates in the queue are
+    # readable by anyone the mode lets in, sticky or not.
+    assert queue_directory_fault(0o1777, owner_uid=501, process_uid=501) is not None
+
+
+@pytest.mark.guarantee
+def test_a_writable_ancestor_is_refused_under_a_perfectly_narrow_leaf(tmp_path):
+    """The hole the leaf check could not see. The queue directory itself is
+    0700 and owned by this process, and it is still not safe: anything that can
+    write the parent can rename it aside and put its own directory there."""
+    spool = tmp_path / "var" / "spool"
+    directory = spool / "queue"
+    directory.mkdir(parents=True)
+    directory.chmod(QUEUE_DIR_MODE)
+    spool.chmod(0o777)
+
+    with pytest.raises(QueueDirectoryUnsafe, match="ancestor"):
+        ReadQueue(directory / "push-queue.jsonl")
+
+    spool.chmod(0o755)  # so tmp_path can be cleaned up
+
+
+def test_a_correct_chain_starts(tmp_path):
+    """The control. Without it the test above is satisfied by a walk that
+    refuses every path in existence -- which is what a literal reading of "the
+    leaf's rule, applied to every ancestor" produces, because `/` is root's."""
+    directory = tmp_path / "var" / "spool" / "queue"
+    queue = ReadQueue(directory / "push-queue.jsonl")
+
+    assert queue.load() == []
+    for component in (directory, directory.parent, directory.parent.parent):
+        assert stat.S_IMODE(component.stat().st_mode) == QUEUE_DIR_MODE, (
+            "an intermediate created by the service was left at the umask"
+        )
+
+
+@pytest.mark.guarantee
+def test_a_relative_queue_path_is_refused(tmp_path, monkeypatch):
+    """It resolves against whatever directory the service was started in, so
+    the security of the queue would be decided by the caller's shell. Refused
+    with the reason named rather than resolved silently."""
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(QueueDirectoryUnsafe, match="relative"):
+        ReadQueue(Path("var/push-queue.jsonl"))
+
+    # The control: the same path made absolute is accepted, so what is being
+    # refused is the relativity and not the path.
+    ReadQueue(tmp_path / "var" / "push-queue.jsonl")
+
+
+@pytest.mark.guarantee
+def test_a_queue_directory_substituted_under_a_writable_parent_is_not_loaded(tmp_path):
+    """The forgery the walk closes, run the way it was found.
+
+    The attacker cannot write the queue directory -- it is 0700 -- so they
+    rename it aside and put their own in its place, which the parent lets them
+    do. Nothing holds a directory handle, so a service that started here would
+    read the substitute on its next load. It does not start.
+
+    What this does NOT close, and it is the same residual the widening test
+    above records: a parent widened AFTER a queue object exists is caught on
+    the next start, not while running.
+    """
+    spool = tmp_path / "var" / "spool"
+    directory = spool / "queue"
+    directory.mkdir(parents=True)
+    directory.chmod(QUEUE_DIR_MODE)
+    spool.chmod(0o777)
+
+    forged = spool / "queue-forged"
+    forged.mkdir()
+    forged.chmod(QUEUE_DIR_MODE)
+    (forged / "push-queue.jsonl").write_text(
+        json.dumps(
+            {
+                "read_id": "FAKE-999",
+                "captured_at": utc_now(),
+                "camera_id": "lane-1",
+                "identity": {"plate": "FAKE99"},
+                "confidence": 0.99,
+                "engine": {"name": "stub", "version": "0.0.0"},
+                "threshold_applied": 0.9,
+                "outcome": ANSWER,
+            }
+        )
+        + "\n"
+    )
+    directory.rename(spool / "queue-real")
+    forged.rename(directory)
+
+    with pytest.raises(QueueDirectoryUnsafe, match="ancestor"):
+        ReadQueue(directory / "push-queue.jsonl")
+
+    spool.chmod(0o755)

@@ -353,8 +353,14 @@ Three things this release does NOT do, stated rather than left to be discovered:
   sound.** The queue is a plain file, created `0600`, and whatever is in it is
   delivered — a line written into it by hand is loaded, built into a record and
   delivered as a genuine read. So the service creates its queue directory
-  `0700` and REFUSES to start on one that is wider, or owned by another user.
-  There is no flag that turns that off.
+  `0700` and REFUSES to start unless the directory AND EVERY ANCESTOR OF IT is
+  safe: the directory owned by this process and no wider than `0700`, each
+  ancestor owned by this process or by root and writable by nobody else. The
+  leaf alone is not enough — a perfect `0700` directory under a parent anyone
+  can write can be renamed aside and replaced, and every load re-opens by path.
+  A relative `--queue` is refused outright, because it resolves against whatever
+  directory the service was started in. There is no flag that turns any of that
+  off.
 
 ## What presence is measured to do, and what it is measured NOT to do
 

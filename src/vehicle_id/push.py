@@ -73,7 +73,9 @@ class QueueDirectoryUnsafe(Exception):
     """
 
 
-def queue_directory_fault(mode: int, owner_uid: int, process_uid: int) -> str | None:
+def queue_directory_fault(
+    mode: int, owner_uid: int, process_uid: int, *, leaf: bool = True
+) -> str | None:
     """Why this directory is not safe to hold a queue, or None if it is.
 
     Separated from the syscalls deliberately. Handing a directory to another
@@ -84,45 +86,110 @@ def queue_directory_fault(mode: int, owner_uid: int, process_uid: int) -> str | 
 
     Ownership is checked FIRST. A directory somebody else owns is theirs to
     chmod back whenever they like, so a narrow mode on it proves nothing.
+
+    `leaf=False` asks the same question of an ANCESTOR, and the rule is weaker
+    in exactly two places because it has to be:
+
+    * a component may be owned by ROOT as well as by this process. Every path
+      ends at `/`, which is root-owned on every system there is, so requiring
+      each component to be the process's own refuses every path in the universe
+      -- measured, not assumed. Root can read the queue, chmod it, or attach to
+      the process anyway, so trusting root-owned components loses nothing.
+    * a component may be READABLE by others -- `/`, `/var` and `/private` are
+      0755 everywhere -- but it may not be WRITABLE by them. Writable is the
+      whole attack: anything that can write a component can rename the queue
+      directory aside, put its own in place, and have hand-written lines
+      delivered as genuine reads. Read on an ancestor gives away nothing; the
+      leaf's own 0700 is what keeps the plates private.
+
+    ...and a STICKY world-writable ancestor is not writable in the sense that
+    matters. `/tmp` is 1777 on every system there is, and the sticky bit is
+    exactly the rule this check needs: only the owner of an entry may rename or
+    remove it, so a stranger cannot swap the queue directory out. Without this
+    the check refuses every path under `/tmp` and tells the operator to run
+    `chmod go-w /tmp`, which is worse advice than the check is protection.
     """
-    if owner_uid != process_uid:
+    trusted_owners = {process_uid} if leaf else {process_uid, 0}
+    if owner_uid not in trusted_owners:
         return (
             f"it is owned by uid {owner_uid}, not by this process (uid {process_uid}). A queue "
             "directory somebody else owns is a queue somebody else can write a read into, and "
             "a hand-written line is delivered as genuine."
         )
-    if mode & 0o077:
+    if leaf:
+        forbidden = 0o077
+    elif mode & stat.S_ISVTX:
+        forbidden = 0
+    else:
+        forbidden = 0o022
+    if mode & forbidden:
+        wider_than = QUEUE_DIR_MODE if leaf else 0o755
         return (
-            f"it is mode {mode:04o}, which is wider than {QUEUE_DIR_MODE:04o}. Anything that "
+            f"it is mode {mode:04o}, which is wider than {wider_than:04o}. Anything that "
             "can write this directory can put a plate into a consumer's stream."
         )
     return None
 
 
 def ensure_queue_directory(directory: Path) -> None:
-    """Create the queue directory narrow, or refuse a directory that is not.
+    """Create the queue directory narrow, and refuse a PATH that is not the
+    process's own -- every component of it, not just the last one.
 
     Created and then chmodded, rather than relying on `mkdir`'s mode:
     `parents=True` creates every INTERMEDIATE directory at the default mode
     whatever `mode` says, and a bare `mkdir()` leaves even the leaf to the
     process umask -- 0755 under the usual 022 and 0777 under a permissive one.
-    The chmod makes the leaf exact rather than a function of how the service
-    happened to be started.
-    """
-    if not directory.exists():
-        directory.mkdir(parents=True, exist_ok=True)
-        directory.chmod(QUEUE_DIR_MODE)
-        return
+    Each component this creates is chmodded as it is made, so what the service
+    builds does not depend on how the service happened to be started.
 
-    if not directory.is_dir():
+    THE LEAF WAS THE ONLY THING CHECKED, AND THE LEAF IS NOT THE PATH. A correct
+    0700 directory under a parent anyone can write is not safe: the parent lets
+    a stranger rename it aside and put their own in its place, and nothing holds
+    a directory handle -- every load re-opens by path -- so a RUNNING service
+    picks the substitution up on its next read and delivers hand-written lines
+    as genuine reads. The check therefore walks to the root.
+
+    A RELATIVE path is refused outright. It resolves against whatever directory
+    the service was started in, which nothing checks, nothing records and
+    nothing names -- so the security of the queue would depend on the caller's
+    shell.
+    """
+    if not directory.is_absolute():
+        raise QueueDirectoryUnsafe(
+            f"refusing a relative queue path: the queue directory ({directory}) resolves "
+            "against whatever directory this process was started in, which nothing here "
+            "checks and nothing records. Pass an absolute --queue."
+        )
+
+    directory = directory.resolve()
+    if not directory.exists():
+        # Made one component at a time so each is narrowed as it appears.
+        # `mkdir(parents=True)` leaves every intermediate at the umask, and
+        # those intermediates are exactly what the walk below then refuses.
+        for component in reversed([d for d in (directory, *directory.parents) if not d.exists()]):
+            component.mkdir()
+            component.chmod(QUEUE_DIR_MODE)
+    elif not directory.is_dir():
         raise QueueDirectoryUnsafe(f"{directory} exists and is not a directory")
 
-    info = directory.stat()
-    fault = queue_directory_fault(stat.S_IMODE(info.st_mode), info.st_uid, os.getuid())
-    if fault is not None:
+    for component in (directory, *directory.parents):
+        info = component.stat()
+        fault = queue_directory_fault(
+            stat.S_IMODE(info.st_mode),
+            info.st_uid,
+            os.getuid(),
+            leaf=component == directory,
+        )
+        if fault is None:
+            continue
+        if component == directory:
+            raise QueueDirectoryUnsafe(
+                f"refusing to use {directory} as a queue directory: {fault} "
+                f"Run: chmod {QUEUE_DIR_MODE:04o} {directory}"
+            )
         raise QueueDirectoryUnsafe(
-            f"refusing to use {directory} as a queue directory: {fault} "
-            f"Run: chmod {QUEUE_DIR_MODE:04o} {directory}"
+            f"refusing to use {directory} as a queue directory: its ancestor {component} is "
+            f"not safe -- {fault} Run: chmod go-w {component}"
         )
 
 
