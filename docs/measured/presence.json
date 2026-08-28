@@ -1,0 +1,777 @@
+{
+  "exposure": {
+    "reference_level": 90,
+    "lowest_level_still_false": 20,
+    "highest_level_still_false": 250,
+    "levels_tested": [
+      20,
+      25,
+      30,
+      35,
+      40,
+      45,
+      50,
+      55,
+      60,
+      65,
+      70,
+      75,
+      80,
+      85,
+      90,
+      95,
+      100,
+      105,
+      110,
+      115,
+      120,
+      125,
+      130,
+      135,
+      140,
+      145,
+      150,
+      155,
+      160,
+      165,
+      170,
+      175,
+      180,
+      185,
+      190,
+      195,
+      200,
+      205,
+      210,
+      215,
+      220,
+      225,
+      230,
+      235,
+      240,
+      245,
+      250
+    ],
+    "all_false_across_range": true
+  },
+  "confidence_transition": {
+    "samples": 41,
+    "largest_confidence_step": 0.0779,
+    "confidence_at_lowest_occupancy": 0.4948,
+    "lowest_occupancy_sampled": 0.0758,
+    "confidence_within_5pp_of_the_boundary_max": 0.2773,
+    "empty_lane_confidence": 0.9901
+  },
+  "separation": {
+    "ground texture 0.25, headlights off": {
+      "texture": 0.25,
+      "headlight": 0.0,
+      "cells": 18,
+      "vehicle_seen": 18,
+      "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
+      "empty_called_empty": 0,
+      "empty_false_positive": 18,
+      "worst_vehicle_occupancy": 0.6981,
+      "worst_empty_occupancy": 0.653,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.0451,
+      "separates": false
+    },
+    "ground texture 0.25, headlight pool x3": {
+      "texture": 0.25,
+      "headlight": 2.0,
+      "cells": 18,
+      "vehicle_seen": 16,
+      "vehicle_refused": 0,
+      "vehicle_not_measured": 2,
+      "vehicle_not_measured_health": {
+        "reference_not_recognised": 2
+      },
+      "vehicle_not_measured_cells": [
+        {
+          "contrast": 2.05,
+          "surface": 0.0,
+          "vehicle_frame_fraction": 0.4375,
+          "camera_health": "reference_not_recognised",
+          "reason": "only 7.5% of the reference view is still recognisable, below 10.0%; this capture is not a view of the lane the reference describes"
+        },
+        {
+          "contrast": 2.05,
+          "surface": 0.02,
+          "vehicle_frame_fraction": 0.4375,
+          "camera_health": "reference_not_recognised",
+          "reason": "only 7.4% of the reference view is still recognisable, below 10.0%; this capture is not a view of the lane the reference describes"
+        }
+      ],
+      "empty_called_empty": 4,
+      "empty_false_positive": 14,
+      "worst_vehicle_occupancy": 0.5659,
+      "worst_empty_occupancy": 0.3193,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.2466,
+      "separates": false
+    },
+    "ground texture 1, headlights off": {
+      "texture": 1.0,
+      "headlight": 0.0,
+      "cells": 18,
+      "vehicle_seen": 18,
+      "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
+      "empty_called_empty": 18,
+      "empty_false_positive": 0,
+      "worst_vehicle_occupancy": 0.4276,
+      "worst_empty_occupancy": 0.0024,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.4253,
+      "separates": true
+    },
+    "ground texture 1, headlight pool x3": {
+      "texture": 1.0,
+      "headlight": 2.0,
+      "cells": 18,
+      "vehicle_seen": 18,
+      "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
+      "empty_called_empty": 18,
+      "empty_false_positive": 0,
+      "worst_vehicle_occupancy": 0.4469,
+      "worst_empty_occupancy": 0.001,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.4459,
+      "separates": true
+    },
+    "ground texture 2, headlights off": {
+      "texture": 2.0,
+      "headlight": 0.0,
+      "cells": 18,
+      "vehicle_seen": 18,
+      "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
+      "empty_called_empty": 18,
+      "empty_false_positive": 0,
+      "worst_vehicle_occupancy": 0.4243,
+      "worst_empty_occupancy": 0.0,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.4243,
+      "separates": true
+    },
+    "ground texture 2, headlight pool x3": {
+      "texture": 2.0,
+      "headlight": 2.0,
+      "cells": 18,
+      "vehicle_seen": 18,
+      "vehicle_refused": 0,
+      "vehicle_not_measured": 0,
+      "vehicle_not_measured_health": {},
+      "vehicle_not_measured_cells": [],
+      "empty_called_empty": 18,
+      "empty_false_positive": 0,
+      "worst_vehicle_occupancy": 0.4399,
+      "worst_empty_occupancy": 0.0,
+      "contrasts": [
+        0.35,
+        0.55,
+        0.78,
+        0.9,
+        1.0,
+        1.1,
+        1.22,
+        1.5,
+        2.05
+      ],
+      "margin": 0.4399,
+      "separates": true
+    }
+  },
+  "weather": {
+    "sweep": [
+      {
+        "coverage": 0.05,
+        "empty_lane": {
+          "present": false,
+          "occupancy": 0.0208,
+          "confidence": 0.8613,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.5187,
+          "confidence": 0.4916,
+          "camera_health": null
+        },
+        "metal_plate": {
+          "present": false,
+          "occupancy": 0.0471,
+          "confidence": 0.6862,
+          "camera_health": null
+        }
+      },
+      {
+        "coverage": 0.1,
+        "empty_lane": {
+          "present": true,
+          "occupancy": 0.4277,
+          "confidence": 0.3703,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.6658,
+          "confidence": 0.6877,
+          "camera_health": null
+        },
+        "metal_plate": {
+          "present": true,
+          "occupancy": 0.4313,
+          "confidence": 0.375,
+          "camera_health": null
+        }
+      },
+      {
+        "coverage": 0.15,
+        "empty_lane": {
+          "present": true,
+          "occupancy": 0.6122,
+          "confidence": 0.6163,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.7238,
+          "confidence": 0.765,
+          "camera_health": null
+        },
+        "metal_plate": {
+          "present": true,
+          "occupancy": 0.6153,
+          "confidence": 0.6204,
+          "camera_health": null
+        }
+      },
+      {
+        "coverage": 0.2,
+        "empty_lane": {
+          "present": true,
+          "occupancy": 0.825,
+          "confidence": 0.9,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.8783,
+          "confidence": 0.9711,
+          "camera_health": null
+        },
+        "metal_plate": {
+          "present": true,
+          "occupancy": 0.8254,
+          "confidence": 0.9006,
+          "camera_health": null
+        }
+      },
+      {
+        "coverage": 0.25,
+        "empty_lane": {
+          "present": true,
+          "occupancy": 0.8903,
+          "confidence": 0.987,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        },
+        "metal_plate": {
+          "present": true,
+          "occupancy": 0.8896,
+          "confidence": 0.9861,
+          "camera_health": null
+        }
+      },
+      {
+        "coverage": 0.3,
+        "empty_lane": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        },
+        "vehicle": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        },
+        "metal_plate": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        }
+      },
+      {
+        "coverage": 0.35,
+        "empty_lane": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        },
+        "vehicle": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        },
+        "metal_plate": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        }
+      },
+      {
+        "coverage": 0.45,
+        "empty_lane": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        },
+        "vehicle": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        },
+        "metal_plate": {
+          "present": null,
+          "occupancy": null,
+          "confidence": null,
+          "camera_health": "reference_not_recognised"
+        }
+      }
+    ],
+    "highest_coverage_still_answered_false": 0.05,
+    "coverages_reading_occupied_with_an_empty_lane": [
+      0.1,
+      0.15,
+      0.2,
+      0.25
+    ],
+    "lowest_coverage_reading_occupied": 0.1,
+    "highest_confidence_reading_occupied": 0.987,
+    "lowest_coverage_declining_to_answer": 0.3,
+    "metal_plate_admitted_from": 0.1,
+    "vehicle_cells": 8,
+    "vehicle_refusals": 0,
+    "never_refuses_in_weather": true
+  },
+  "headlight": {
+    "sweep": [
+      {
+        "pool": 0.0,
+        "ambient": 90,
+        "empty_lane": {
+          "present": false,
+          "occupancy": 0.001,
+          "confidence": 0.9934,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.4278,
+          "confidence": 0.3704,
+          "camera_health": null
+        }
+      },
+      {
+        "pool": 0.5,
+        "ambient": 90,
+        "empty_lane": {
+          "present": false,
+          "occupancy": 0.0004,
+          "confidence": 0.997,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.4416,
+          "confidence": 0.3888,
+          "camera_health": null
+        }
+      },
+      {
+        "pool": 1.0,
+        "ambient": 90,
+        "empty_lane": {
+          "present": false,
+          "occupancy": 0.0002,
+          "confidence": 0.9989,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.4473,
+          "confidence": 0.3964,
+          "camera_health": null
+        }
+      },
+      {
+        "pool": 2.0,
+        "ambient": 90,
+        "empty_lane": {
+          "present": false,
+          "occupancy": 0.001,
+          "confidence": 0.9933,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.4527,
+          "confidence": 0.4037,
+          "camera_health": null
+        }
+      },
+      {
+        "pool": 3.0,
+        "ambient": 90,
+        "empty_lane": {
+          "present": true,
+          "occupancy": 0.2049,
+          "confidence": 0.0732,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.4977,
+          "confidence": 0.4636,
+          "camera_health": null
+        }
+      },
+      {
+        "pool": 4.0,
+        "ambient": 90,
+        "empty_lane": {
+          "present": true,
+          "occupancy": 0.3349,
+          "confidence": 0.2466,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.5402,
+          "confidence": 0.5203,
+          "camera_health": null
+        }
+      },
+      {
+        "pool": 6.0,
+        "ambient": 90,
+        "empty_lane": {
+          "present": true,
+          "occupancy": 0.4768,
+          "confidence": 0.4357,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.639,
+          "confidence": 0.652,
+          "camera_health": null
+        }
+      },
+      {
+        "pool": 8.0,
+        "ambient": 90,
+        "empty_lane": {
+          "present": true,
+          "occupancy": 0.8043,
+          "confidence": 0.8724,
+          "camera_health": null
+        },
+        "vehicle": {
+          "present": true,
+          "occupancy": 0.6667,
+          "confidence": 0.6889,
+          "camera_health": null
+        }
+      }
+    ],
+    "model": "multiplicative pool on a matte floor; no specular glare, no beam cut-off",
+    "peak_offset": 1,
+    "ambient_level": 90,
+    "ambient_levels_swept": 1,
+    "highest_pool_still_empty": 2.0,
+    "lowest_pool_reading_occupied": 3.0,
+    "vehicle_cells": 8,
+    "vehicle_refusals": 0,
+    "never_refuses_under_headlights": true
+  },
+  "texture_floor": {
+    "min_reference_texture": 1.5,
+    "matrix_ground_reference_texture": {
+      "texture 0.25": 3.821,
+      "texture 1": 9.194,
+      "texture 2": 17.46
+    },
+    "matrix_axis_can_reach_the_floor": false,
+    "smooth_floor_reference_texture": 0.67,
+    "smooth_floor": {
+      "present": null,
+      "occupancy": null,
+      "confidence": null,
+      "camera_health": null
+    },
+    "smooth_floor_reason": "the reference view's local texture is 0.67 grey levels, below 1.5; this ground carries nothing for a structural comparison to recognise",
+    "reached": true
+  },
+  "conflated_reasons": {
+    "causes": {
+      "a vehicle close enough to fill the frame": "reference_not_recognised",
+      "heavy weather": "reference_not_recognised",
+      "a capture that is not a view of this lane: a camera knocked out of alignment, or a scene rebuilt overnight": "reference_not_recognised",
+      "an ordinary vehicle arriving on low-texture ground under a beam pool": "reference_not_recognised"
+    },
+    "causes_that_are_equipment_faults": [
+      "a capture that is not a view of this lane: a camera knocked out of alignment, or a scene rebuilt overnight"
+    ],
+    "all_report_the_same_reason": true,
+    "reason_reported": [
+      "reference_not_recognised"
+    ]
+  },
+  "limitations": [
+    {
+      "measured_in": "separation",
+      "topic": "ground smooth enough that vehicle and empty lane do not separate",
+      "seam_word": "smooth ground"
+    },
+    {
+      "measured_in": "weather",
+      "topic": "an empty lane reads as occupied wherever bright streaks break up the camera's view of the ground, which rain and snow both do; what was measured is how much of the frame they cover, not what produced them",
+      "seam_word": "bright streaks"
+    },
+    {
+      "measured_in": "weather",
+      "topic": "the metal plate on the loop transacts in that band",
+      "seam_word": "metal plate"
+    },
+    {
+      "measured_in": "headlight",
+      "topic": "a beam pool reads as occupied before the car that cast it arrives",
+      "seam_word": "headlight pool on the floor"
+    },
+    {
+      "measured_in": "texture_floor",
+      "topic": "ground under the texture floor is declined rather than answered",
+      "seam_word": "it fails to null"
+    },
+    {
+      "measured_in": "conflated_reasons",
+      "topic": "one reason covers several unrelated conditions",
+      "seam_word": "reference_not_recognised"
+    },
+    {
+      "measured_in": "separation",
+      "topic": "an ordinary arrival is reported as a camera fault",
+      "seam_word": "camera_faults"
+    }
+  ],
+  "scenes": {
+    "real_frames_measured": 0
+  },
+  "noise": {
+    "reads_per_seed": 150,
+    "seeds": 12,
+    "weights_id": "sha256:0de21983b58b0ecd",
+    "no_gate_1_capture": {
+      "answered_counts": [
+        4,
+        1,
+        2,
+        0,
+        5,
+        3,
+        5,
+        4,
+        6,
+        1,
+        2,
+        1
+      ],
+      "mean_pct": 1.889,
+      "min_pct": 0.0,
+      "max_pct": 4.0
+    },
+    "no_gate_3_capture": {
+      "answered_counts": [
+        1,
+        2,
+        2,
+        1,
+        3,
+        1,
+        1,
+        2,
+        5,
+        2,
+        5,
+        1
+      ],
+      "mean_pct": 1.444,
+      "min_pct": 0.667,
+      "max_pct": 3.333
+    },
+    "gated_1_capture": {
+      "answered_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "mean_pct": 0.0,
+      "min_pct": 0.0,
+      "max_pct": 0.0
+    },
+    "gated_3_capture": {
+      "answered_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "mean_pct": 0.0,
+      "min_pct": 0.0,
+      "max_pct": 0.0
+    }
+  },
+  "gate": {
+    "min_occupancy": 0.15,
+    "max_occupancy": 0.9,
+    "min_structural_change": 0.5,
+    "stabiliser": 0.5,
+    "window": 11,
+    "min_frame_std": 4.0,
+    "min_reference_match": 0.1,
+    "min_reference_texture": 1.5
+  },
+  "controls": {
+    "exposure.all_false_across_range": {
+      "how": "the same sweep extended to light levels 1-11, which the illumination fit cannot reconcile with a reference captured at 90",
+      "value": false
+    },
+    "separation.separates": {
+      "how": "the same matrix with min_structural_change at 0.999, so no window can register as changed",
+      "value": false,
+      "also_occurs_unplanted": "the ground texture 0.25 rows separate=false in the published run; a real failure beats a planted one"
+    },
+    "weather.never_refuses_in_weather": {
+      "how": "the same sweep with min_occupancy at 0.85, so a vehicle reads as an empty lane",
+      "value": false
+    },
+    "headlight.never_refuses_under_headlights": {
+      "how": "the same sweep with min_occupancy at 0.85, so a vehicle reads as an empty lane",
+      "value": false
+    },
+    "weather.present": {
+      "how": "the same sweep with min_occupancy at 0.85, so a vehicle reads as an empty lane; the verdict for the vehicle scene at the lowest coverage",
+      "value": false
+    },
+    "headlight.present": {
+      "how": "the same sweep with min_occupancy at 0.85, so a vehicle reads as an empty lane; the verdict for the vehicle scene at the lowest pool",
+      "value": false
+    },
+    "conflated_reasons.all_report_the_same_reason": {
+      "how": "a dead camera beside a frame-filling object; these are named differently, so the flag can be seen to distinguish them",
+      "value": false,
+      "reasons_seen": {
+        "a dead camera": "no_signal",
+        "a vehicle close enough to fill the frame": "reference_not_recognised"
+      }
+    },
+    "texture_floor.reached": {
+      "how": "the same predicate on the matrix's own ground at its smoothest setting; sensor grain alone keeps it above the floor, so the untextured branch is never taken",
+      "value": false,
+      "reason_seen": "0.0% of the frame differs from the empty lane, threshold 15.0%"
+    }
+  }
+}

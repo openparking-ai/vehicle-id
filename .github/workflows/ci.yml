@@ -64,6 +64,11 @@ jobs:
           PY
 
       - name: Tests
+        # The contract, the service and the push queue only. Everything that
+        # needs OpenCV or torch skips here, including the presence guarantees --
+        # named, because an unnamed skip of a guarantee test now fails the run.
+        env:
+          VEHICLE_ID_ALLOW_SKIPPED: "could not import"
         run: pytest -q
 
   engine:
@@ -97,7 +102,21 @@ jobs:
               cv2.imwrite(str(out / f"plate{i}.png"), sample.image)
           PY
 
+      - name: Is the presence gate CONNECTED, and does it MOVE the number?
+        # Both halves, and neither needs weights. Connectedness is a stub
+        # recogniser at a fixed confidence; "the gate moves the number" is the
+        # same stub answering every noisy frame confidently, so the ungated
+        # control is satisfied by construction instead of by luck. The accuracy
+        # version in test_plates.py may skip; this may not, and the run below
+        # names no allowance on purpose.
+        run: pytest tests/test_presence_wiring.py tests/test_presence.py tests/test_skip_guard.py -q
+
       - name: Engine tests, including never-wrong-silently
+        # The accuracy half, which genuinely needs weights better than the small
+        # model this job trains. The skips are DECLARED: an unnamed skip of a
+        # @guarantee test fails the run.
+        env:
+          VEHICLE_ID_ALLOW_SKIPPED: "needs weights"
         run: pytest tests/test_plates.py -q
 
       - name: The harness runs, reports, and records the operating point
@@ -118,6 +137,65 @@ jobs:
             echo "engine started on weights with no measured operating point"; exit 1
           fi
           echo "refused, as required"
+
+      - name: Every published figure AND SENTENCE is still the measured one
+        # The documentation fail-control. `eval_presence.py` re-measures what the
+        # gate does and the check compares it with what README.md and
+        # docs/CONTRACT.md say. A figure edited by hand turns this red.
+        #
+        # It now covers the SENTENCES too, and that is not a refinement. The
+        # previous release stated a correct measured figure -- "`false` up to 5%
+        # streak coverage" -- and, in the hand-written words beside it, "and
+        # stops answering above that", which the same evidence file contradicted:
+        # there is a `true` band from 10% to 25% in which an empty lane reads as
+        # occupied. A true number lent its credibility to a false sentence in
+        # both published documents and nothing here could see it. Sections
+        # describing measured behaviour are generated as `<!--mb:-->` blocks now,
+        # and this compares them the same way it compares the numbers.
+        #
+        # It also checks the evidence file's own booleans: every one published as
+        # `true` must name a control, and every control must actually be false.
+        # `never_refuses_in_weather` was `all(x is not False or True ...)` for two
+        # rounds -- true for every input in the universe -- and it was the
+        # module's load-bearing safety property.
+        #
+        # NOTE what this deliberately does NOT do: re-measure the noise rates.
+        # It used to, and it was wrong. Those rates describe a RECOGNISER, this
+        # job trains a 600-step model at the same path the release weights live
+        # at, and that model answers zero on noise -- so the job replaced a
+        # figure measured on one model with a figure measured on another and
+        # reported the difference as drift. A comparison between two different
+        # models is not a check. Re-measuring is now an explicit act
+        # (`--measure-noise`) performed with real weights, and the rates carry
+        # the digest of the weights that produced them.
+        run: |
+          python scripts/eval_presence.py
+          git diff --exit-code docs/measured/presence.json || {
+            echo "the gate's measured geometry has changed but docs/measured/presence.json was not updated"
+            echo "run: python scripts/eval_presence.py --update-docs"
+            exit 1
+          }
+          pytest tests/test_measured_docs.py -q
+
+      - name: No published rate without the artefact it was measured on
+        # G4a as a check rather than a convention. A rate whose weights nobody
+        # recorded cannot be reproduced, compared, or believed -- the contract
+        # demands `weights_id` of every record the engine emits, and a figure in
+        # a document is held to the same standard.
+        run: |
+          python - <<'PY'
+          import json, sys
+          noise = json.load(open("docs/measured/presence.json")).get("noise")
+          if noise is None:
+              print("no noise rates recorded; nothing to check"); sys.exit(0)
+          digest = noise.get("weights_id")
+          assert digest and digest.startswith("sha256:"), (
+              f"the published noise rates name no weights ({digest!r}). "
+              "Re-measure with: python scripts/eval_presence.py --measure-noise "
+              "--weights <the real weights>"
+          )
+          print(f"noise rates measured on {digest}")
+          PY
 
       - name: The CLI reads a folder with no system present
         # The definition of done, run as a check: someone with no parking
