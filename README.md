@@ -354,8 +354,6 @@ This is a measured REGRESSION against the intensity measure that preceded it, wh
 
 At ambient level 90, an empty lane holds at `false` up to a pool of x3 ambient and reads as OCCUPIED from x4 — the beams of a car that has not arrived open a transaction for it.
 
-**That boundary is a property of this sweep, not of the gate.** It was measured at 1 ambient level — 90 — and it MOVES with that level: the lane is clipped to 8 bits after the pool multiplies, so how much of the frame saturates, and therefore where the boundary falls, depends on how bright the lane was to begin with. **How it moves is NOT MEASURED**, and the level the reference is captured at is a fixture choice nothing has measured either. Read the number as: this is what happened at this one level.
-
 0 of 8 vehicle scenes were refused. **The model is a limitation of these numbers**: multiplicative pool on a matte floor; no specular glare, no beam cut-off. A gloss or wet floor at night is a specular scene and this is a matte one. NOT MEASURED on any real frame (0 have ever been through this gate).
 <!--/mb-->
 
@@ -375,7 +373,7 @@ Every one of those 124 scenes is a drawn rectangle on a drawn lane — NOT MEASU
 
 It is published under `camera_faults` in `GET /v1/health`. That is right for 1 of the 4 — a capture that is not a view of this lane — and wrong for the other 3, where nothing is broken. **Do not read this reason as a confirmed equipment fault** — read it as "the capture no longer matches the reference, for one of several reasons this build cannot separate". Separating them needs a measurement this release does not make, and inventing one would be guessing; naming the conflation is the honest thing available now.
 
-**One of those conditions is a car arriving.** 2 of the 108 separation-matrix cells put an ordinary vehicle — 44% of the frame, not one filling it — in front of the camera and got `reference_not_recognised` back. Each of those cells, in full: ground texture 0.25, headlight pool x3 — contrast 2.05 / surface grain 0, contrast 2.05 / surface grain 0.02. The gate counts that under `camera_faults`, so an arriving car pages a technician about a working camera. NOT MEASURED on any real frame (0 have ever been through this gate): how often a real entry lands in one of these configurations is not known, and these are drawn rectangles. What is known is that the reason cannot be read as equipment on its own.
+**One of those conditions is a car arriving.** 2 of the 108 separation-matrix cells put an ordinary vehicle — 44% of the frame, not one filling it — in front of the camera and got `reference_not_recognised` back. The gate counts that under `camera_faults`, so an arriving car pages a technician about a working camera. NOT MEASURED on any real frame (0 have ever been through this gate): how often a real entry lands in one of these configurations is not known, and these are drawn rectangles. What is known is that the reason cannot be read as equipment on its own.
 <!--/mb-->
 
 ### What is assumed rather than measured
