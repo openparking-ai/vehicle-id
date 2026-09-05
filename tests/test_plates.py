@@ -128,6 +128,105 @@ def test_florida_is_weighted_up():
     assert states.count("FL") > len(states) / 3, "Florida first, per E2"
 
 
+@pytest.mark.guarantee
+def test_every_template_in_the_tuple_is_actually_sampled():
+    """Derived from TEMPLATES, so an addition is noticed without being told.
+
+    The fail-control is NOT removing the template from the tuple -- the tuple is
+    both subject and oracle there, so the test would stay green with one fewer
+    template. It is setting the template's `weight` to 0.0: it stays in the
+    list, the sampler cannot reach it, and this goes red. That is also the
+    failure worth catching, because a weight is the one field that can drop a
+    template out of training while every list still shows it.
+    """
+    from vehicle_id.plates.templates import TEMPLATES
+
+    sampled = {s.state for s in PlateGenerator(seed=0).batch(300)}
+    missing = [t.state for t in TEMPLATES if t.state not in sampled]
+    assert not missing, f"never sampled in 300 draws at seed 0: {missing}"
+
+
+@pytest.mark.guarantee
+def test_the_class_count_is_a_stated_fact():
+    """A charset change is a full retrain and a new `weights_id`.
+
+    Stated here so it can never be a silent class-count change discovered as a
+    shape mismatch when an older checkpoint refuses to load.
+    """
+    from vehicle_id.plates.model import NUM_CLASSES
+    from vehicle_id.plates.templates import charset
+
+    assert len(charset()) == 36
+    assert NUM_CLASSES == 37
+
+
+@pytest.mark.guarantee
+def test_a_template_with_its_own_letters_draws_only_those():
+    """A restricted layout must not be trained on registrations it cannot have."""
+    from vehicle_id.plates.templates import TEMPLATES
+
+    restricted = [t for t in TEMPLATES if t.letters]
+    assert restricted, "no template declares its own letter set; this check is empty"
+    samples = PlateGenerator(seed=0).batch(600)
+    for template in restricted:
+        drawn = {
+            ch
+            for s in samples
+            if s.state == template.state
+            for ch in s.text
+            if ch.isalpha()
+        }
+        assert drawn, f"{template.state} never sampled; cannot check its letters"
+        assert drawn <= set(template.letters), (
+            f"{template.state} drew {sorted(drawn - set(template.letters))}, "
+            "which its layout cannot contain"
+        )
+
+
+@pytest.mark.guarantee
+def test_the_widest_registration_fits_every_template_text_area():
+    """The band and the scale range are chosen together, not separately.
+
+    The generator's scale variation stands in for the font variation it cannot
+    model, so it is not narrowed for a banded template. Instead the band is
+    sized so the widest rendering still fits. Thickness is not a dimension here:
+    it does not change the advance width, measured.
+    """
+    import cv2
+
+    from vehicle_id.plates.generator import PLATE_W
+    from vehicle_id.plates.templates import DIGITS, LETTERS, TEMPLATES
+
+    fonts = (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX, cv2.FONT_HERSHEY_TRIPLEX)
+
+    def widest(pool):
+        return max(pool, key=lambda c: max(cv2.getTextSize(c * 8, f, 1.9, 6)[0][0] for f in fonts))
+
+    for template in TEMPLATES:
+        area = PLATE_W - template.band
+        letter = widest(template.letters or LETTERS)
+        digit = widest(DIGITS)
+        for pattern in template.patterns:
+            specimen = pattern.replace("L", letter).replace("N", digit)
+            tw = max(cv2.getTextSize(specimen, f, 1.9, 6)[0][0] for f in fonts)
+            # Every template: the registration never leaves the plate.
+            assert tw <= area, (
+                f"{template.state} pattern {pattern!r} renders {tw}px into a "
+                f"{area}px text area (band {template.band}) and would run off the plate"
+            )
+            # A BANDED template additionally leaves room to centre, which is what
+            # bounds the band width. The unbanded templates are NOT held to this:
+            # GA's "LLLL NNN" and TX's "NNN LLLL" render 306px into 320 and reach
+            # the 8px floor already, unchanged by this round and recorded rather
+            # than quietly fixed.
+            if template.band:
+                assert tw <= area - 16, (
+                    f"{template.state} pattern {pattern!r} renders {tw}px into a "
+                    f"{area}px text area (band {template.band}); the band is too "
+                    "wide for the scale range"
+                )
+
+
 # --- the engine -----------------------------------------------------------
 
 @needs_weights
