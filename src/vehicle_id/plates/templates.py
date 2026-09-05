@@ -1,4 +1,4 @@
-"""US plate layout templates, Florida first.
+"""Plate layout templates, the highest-volume one first.
 
 These are APPROXIMATIONS of real layouts, not reproductions. They exist to give
 the generator a realistic distribution of character counts, groupings and
@@ -7,7 +7,7 @@ not learning a single rigid shape.
 
 Two honest limitations, recorded here rather than discovered later:
 
-  * The FONTS are wrong. Real US plates use specific embossing typefaces which
+  * The FONTS are wrong. Real plates use specific embossing typefaces which
     we neither have nor could redistribute. The generator uses OpenCV's built-in
     Hershey fonts. This is the single largest domain gap between synthetic and
     real plates, and it is why real-plate accuracy stays unmeasured until the
@@ -38,6 +38,18 @@ class PlateTemplate:
     ink: tuple[int, int, int] = (35, 35, 45)
     #: Relative frequency when sampling. Florida is weighted up deliberately.
     weight: float = 1.0
+    #: The letters THIS layout uses, when it uses fewer than all of them. A
+    #: layout whose registrations can only contain a restricted set would
+    #: otherwise be trained on registrations it cannot have -- so the generator
+    #: draws from this when it is set, and from `LETTERS` when it is not. The
+    #: model's charset is the UNION, so a template adding a letter is the only
+    #: thing that moves the class count.
+    letters: str = ""
+    #: Width in px of a plain coloured band down the left edge, carrying no
+    #: text. The registration is centred in what is left. 0 means no band.
+    band: int = 0
+    #: BGR, because OpenCV.
+    band_colour: tuple[int, int, int] = (140, 60, 20)
 
 
 TEMPLATES: tuple[PlateTemplate, ...] = (
@@ -80,12 +92,43 @@ TEMPLATES: tuple[PlateTemplate, ...] = (
         ink=(30, 45, 90),
         weight=1.0,
     ),
+    # A layout with a plain band down the left edge and a restricted letter
+    # set. It carries no top or bottom text: there is nothing it needs to say.
+    #
+    # The band is 6 px, and that number is DERIVED rather than chosen. The
+    # widest registration this pattern can draw is "MMM 0000" -- M is the widest
+    # letter these fonts have -- which renders 298 px at the top of the scale
+    # range. Centring keeps 8 px each side, so the band can be at most
+    # PLATE_W - 298 - 16 = 6 px. It is thin, and thin is the honest answer: the
+    # alternative is narrowing the scale range for this template alone, and the
+    # scale variation is what stands in for the font variation the generator
+    # cannot model -- narrowing it on the one layout being measured against real
+    # photographs would bias that measurement.
+    PlateTemplate(
+        state="BAND3L4N",
+        patterns=("LLL NNNN",),
+        letters="ABEZHIKMNOPTYX",
+        background=(250, 250, 250),
+        ink=(35, 35, 40),
+        weight=1.0,
+        band=6,
+    ),
 )
 
 
 def charset() -> str:
-    """Every character a plate can contain, plus CTC blank handled separately."""
-    return LETTERS + DIGITS
+    """Every character a plate can contain, plus CTC blank handled separately.
+
+    The UNION of the module's letters and every template's own, sorted so the
+    class count is a property of the templates rather than of their order. A
+    template that introduces a letter grows this, and growing this changes
+    `PlateNet`'s class count -- which is a full retrain from seed and a new
+    `weights_id`, never a silent change.
+    """
+    letters = set(LETTERS)
+    for template in TEMPLATES:
+        letters |= set(template.letters)
+    return "".join(sorted(letters)) + DIGITS
 
 
 @dataclass(frozen=True, slots=True)
