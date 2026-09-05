@@ -49,6 +49,10 @@ GUARANTEE_MODULES = (
     # file is proven here and nowhere else -- and this module opens with
     # `importorskip`, which is exactly the shape that vanished silently before.
     "test_eval_real_plates.py",
+    # The fold guard and the encodable-label guard. Both refuse rather than
+    # producing a quietly wrong number -- a hold-out that is not one, and a
+    # target `encode` trimmed in silence -- so neither may stop being collected.
+    "test_finetune_real_plates.py",
 )
 
 _skipped: list[tuple[str, str]] = []
