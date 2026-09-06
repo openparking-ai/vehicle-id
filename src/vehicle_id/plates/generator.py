@@ -30,11 +30,16 @@ class Sample:
     degradation: int
 
 
-def _render_text(rng: random.Random, pattern: str) -> str:
+def _render_text(rng: random.Random, pattern: str, letters: str = LETTERS) -> str:
+    """`letters` is the template's own set when it has one.
+
+    A layout whose registrations can only contain a restricted set would
+    otherwise be trained on registrations it cannot have.
+    """
     out = []
     for slot in pattern:
         if slot == "L":
-            out.append(rng.choice(LETTERS))
+            out.append(rng.choice(letters))
         elif slot == "N":
             out.append(rng.choice(DIGITS))
         else:
@@ -43,17 +48,30 @@ def _render_text(rng: random.Random, pattern: str) -> str:
 
 
 def _draw(template: PlateTemplate, text: str, rng: random.Random) -> np.ndarray:
+    """Draw order, fixed so one implementation gives one appearance:
+
+    background -> border rectangle -> band, over the border's left edge, full
+    height -> furniture text -> registration. Everything after the band is
+    inset by it, so a banded template with furniture does not draw over its own
+    band.
+    """
     img = np.full((PLATE_H, PLATE_W, 3), template.background, np.uint8)
 
     # Plate furniture: border, state name, slogan. Present so the recogniser
     # learns to ignore text that is not the registration.
     cv2.rectangle(img, (5, 5), (PLATE_W - 6, PLATE_H - 6), template.ink, 2)
+    if template.band:
+        # A plain coloured band down the left edge, carrying no text. Drawn
+        # over the border's left edge and the full height of the plate.
+        cv2.rectangle(img, (0, 0), (template.band - 1, PLATE_H - 1),
+                      template.band_colour, -1)
+    inset = template.band
     if template.top_text:
-        cv2.putText(img, template.top_text, (14, 30), cv2.FONT_HERSHEY_DUPLEX, 0.55,
+        cv2.putText(img, template.top_text, (inset + 14, 30), cv2.FONT_HERSHEY_DUPLEX, 0.55,
                     template.ink, 1, cv2.LINE_AA)
     if template.bottom_text:
-        cv2.putText(img, template.bottom_text, (14, PLATE_H - 14), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4, template.ink, 1, cv2.LINE_AA)
+        cv2.putText(img, template.bottom_text, (inset + 14, PLATE_H - 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, template.ink, 1, cv2.LINE_AA)
 
     # The registration itself. Font, scale and thickness all vary, because the
     # real variation we cannot model (embossing typefaces) has to be replaced
@@ -63,7 +81,8 @@ def _draw(template: PlateTemplate, text: str, rng: random.Random) -> np.ndarray:
     scale = rng.uniform(1.5, 1.9)
     thickness = rng.choice([4, 5, 6])
     (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-    x = max(8, (PLATE_W - tw) // 2)
+    # Centred in the text area, which is what the band leaves.
+    x = inset + max(8, (PLATE_W - inset - tw) // 2)
     y = (PLATE_H + th) // 2 + rng.randint(-4, 6)
     cv2.putText(img, text, (x, y), font, scale, template.ink, thickness, cv2.LINE_AA)
     return img
@@ -120,7 +139,7 @@ class PlateGenerator:
     def sample(self, degradation: int | None = None) -> Sample:
         template = self.rng.choices(TEMPLATES, weights=self._weights, k=1)[0]
         pattern = self.rng.choice(template.patterns)
-        text = _render_text(self.rng, pattern)
+        text = _render_text(self.rng, pattern, template.letters or LETTERS)
         level = self.rng.randint(0, 6) if degradation is None else degradation
         img = degrade(_draw(template, text, self.rng), level, self.rng)
         return Sample(image=img, text=text, state=template.state, degradation=level)

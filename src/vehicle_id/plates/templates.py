@@ -1,4 +1,4 @@
-"""US plate layout templates, Florida first.
+"""Plate layout templates, the highest-volume one first.
 
 These are APPROXIMATIONS of real layouts, not reproductions. They exist to give
 the generator a realistic distribution of character counts, groupings and
@@ -7,7 +7,7 @@ not learning a single rigid shape.
 
 Two honest limitations, recorded here rather than discovered later:
 
-  * The FONTS are wrong. Real US plates use specific embossing typefaces which
+  * The FONTS are wrong. Real plates use specific embossing typefaces which
     we neither have nor could redistribute. The generator uses OpenCV's built-in
     Hershey fonts. This is the single largest domain gap between synthetic and
     real plates, and it is why real-plate accuracy stays unmeasured until the
@@ -38,6 +38,18 @@ class PlateTemplate:
     ink: tuple[int, int, int] = (35, 35, 45)
     #: Relative frequency when sampling. Florida is weighted up deliberately.
     weight: float = 1.0
+    #: The letters THIS layout uses, when it uses fewer than all of them. A
+    #: layout whose registrations can only contain a restricted set would
+    #: otherwise be trained on registrations it cannot have -- so the generator
+    #: draws from this when it is set, and from `LETTERS` when it is not. The
+    #: model's charset is the UNION, so a template adding a letter is the only
+    #: thing that moves the class count.
+    letters: str = ""
+    #: Width in px of a plain coloured band down the left edge, carrying no
+    #: text. The registration is centred in what is left. 0 means no band.
+    band: int = 0
+    #: BGR, because OpenCV.
+    band_colour: tuple[int, int, int] = (140, 60, 20)
 
 
 TEMPLATES: tuple[PlateTemplate, ...] = (
@@ -84,8 +96,18 @@ TEMPLATES: tuple[PlateTemplate, ...] = (
 
 
 def charset() -> str:
-    """Every character a plate can contain, plus CTC blank handled separately."""
-    return LETTERS + DIGITS
+    """Every character a plate can contain, plus CTC blank handled separately.
+
+    The UNION of the module's letters and every template's own, sorted so the
+    class count is a property of the templates rather than of their order. A
+    template that introduces a letter grows this, and growing this changes
+    `PlateNet`'s class count -- which is a full retrain from seed and a new
+    `weights_id`, never a silent change.
+    """
+    letters = set(LETTERS)
+    for template in TEMPLATES:
+        letters |= set(template.letters)
+    return "".join(sorted(letters)) + DIGITS
 
 
 @dataclass(frozen=True, slots=True)

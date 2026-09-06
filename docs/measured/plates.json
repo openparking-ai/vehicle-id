@@ -1,0 +1,69 @@
+{
+  "weights_id": "sha256:0de21983b58b0ecd",
+  "per_rung": 200,
+  "rungs": 10,
+  "eval_seed": 9999991,
+  "max_silent_wrong_pct": 1.0,
+  "clean_plate_confidence": 0.9982017874717712,
+  "noise_confidence_ceiling": 0.9998027682304382,
+  "candidates": [
+    {
+      "threshold": 0.0,
+      "silent_wrong_pct": 4.8,
+      "fallback_pct": 0.0
+    },
+    {
+      "threshold": 0.5,
+      "silent_wrong_pct": 4.8,
+      "fallback_pct": 0.0
+    },
+    {
+      "threshold": 0.8,
+      "silent_wrong_pct": 4.6,
+      "fallback_pct": 0.2
+    },
+    {
+      "threshold": 0.85,
+      "silent_wrong_pct": 4.45,
+      "fallback_pct": 0.35
+    },
+    {
+      "threshold": 0.9,
+      "silent_wrong_pct": 3.35,
+      "fallback_pct": 1.9
+    },
+    {
+      "threshold": 0.95,
+      "silent_wrong_pct": 2.1,
+      "fallback_pct": 11.1
+    },
+    {
+      "threshold": 0.97,
+      "silent_wrong_pct": 1.3,
+      "fallback_pct": 18.25
+    },
+    {
+      "threshold": 0.98,
+      "silent_wrong_pct": 1.25,
+      "fallback_pct": 23.1
+    },
+    {
+      "threshold": 0.99,
+      "silent_wrong_pct": 0.8,
+      "fallback_pct": 30.6
+    },
+    {
+      "threshold": 0.995,
+      "silent_wrong_pct": 0.45,
+      "fallback_pct": 37.25
+    }
+  ],
+  "operating_point": {
+    "threshold": 0.99,
+    "silent_wrong_pct": 0.8,
+    "fallback_pct": 30.6,
+    "clean_plate_confidence": 0.9982017874717712,
+    "noise_confidence_ceiling": 0.9998027682304382
+  },
+  "naive_threshold": 0.85
+}
