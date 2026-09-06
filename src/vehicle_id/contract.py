@@ -120,6 +120,12 @@ class Capture:
 class Identity:
     """What was measured about the vehicle. Unmeasured stays null.
 
+    An identity is a set of COMPONENTS, not a single value. A plate is one of
+    them, and it is neither mandatory nor permanent -- a garage may run on plate
+    alone, on appearance alone, on a QR code alone, or on any combination. The
+    fields below are components; a consumer reads whichever ones are non-null
+    and is told nothing about the ones that are not.
+
     `marks` is the one field that is a list rather than a nullable scalar, and
     empty means "none were measured", not "the vehicle had none". The
     distinction matters the day something does measure them.
@@ -131,12 +137,29 @@ class Identity:
     model: str | None = None
     color: str | None = None
     marks: tuple[str, ...] = field(default_factory=tuple)
+    #: The APPEARANCE descriptor: an opaque, versioned, compact record computed
+    #: from one capture. It is not an image and it is not human-readable, and
+    #: this module deliberately does not parse it -- the contract carries it and
+    #: `vehicle_id.fingerprint` is what produces and compares it.
+    #:
+    #: Its type is a string for reasons that were measured rather than
+    #: preferred. `Identity` is frozen, slots and hashable; `Read.__post_init__`
+    #: compares one with `!=`; and the wire format is JSON. A dict or a list
+    #: satisfies none of those. A string satisfies all four and survives a
+    #: round trip through JSON unchanged, which a tuple does not.
+    #:
+    #: Null means NOT MEASURED, exactly as it does for every other component. A
+    #: consumer pinned to a commit older than this field sees no descriptor and
+    #: behaves precisely as it did before -- the field is additive, so
+    #: `schema_version` does NOT move for it. See docs/CONTRACT.md
+    #: Compatibility, and `_only_known` below, which is what makes that true.
+    descriptor: str | None = None
 
     def __post_init__(self) -> None:
         # An int plate was accepted here and then crashed inside the lane's
         # decision path on `.upper()`. A field that carries an identity has to
         # be text or absent; there is no third thing it could sensibly be.
-        for name in ("plate", "plate_region", "make", "model", "color"):
+        for name in ("plate", "plate_region", "make", "model", "color", "descriptor"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, str):
                 raise ValueError(f"identity.{name} must be a string or null, got {value!r}")

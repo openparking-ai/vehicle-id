@@ -429,11 +429,69 @@ repository's own test still said 0.7%, and the number passed review by looking
 measured. The sections came later, because the rule as originally written
 protected the numbers and not the sentences around them.
 
+## The appearance descriptor
+
+A plate is one component of a vehicle's identity, not the identity. Plate
+recording is mandatory in no garage we know of and it is an expensive thing to
+run, so `identity.descriptor` carries an appearance component that a site can
+use instead of, or alongside, a plate.
+
+It is **classical**: SIFT or ORB keypoints, an HSV colour histogram and a coarse
+Canny edge grid. No trained model, no downloaded weights, no dataset — which is
+not a shortcut but the licence position. Every general-purpose detector worth
+having is COCO-trained, and COCO's images are not the consortium's to license;
+the plate recogniser's escape was to generate its own training data, and that
+does not transfer, because a plate is a rendered rectangle and a car is not.
+
+```python
+from vehicle_id.fingerprint import compute, compare
+
+a, b = compute(image_one), compute(image_two)
+for term in compare(a, b).terms:
+    print(term.term, term.value, term.measurable)
+```
+
+Three things it deliberately does not do.
+
+- **It never returns a verdict.** `compare` publishes a distance per term. The
+  five terms sit on five different scales, one of them unbounded, and one of
+  them is a similarity that is converted to a distance exactly once — so the
+  scale of every term is published beside its value rather than assumed.
+- **It has three outcomes, not two.** A frame with too little texture yields no
+  keypoints, and "there was nothing to match" is a different answer from
+  "nothing matched". Every term reports `measurable` separately from its value.
+  Collapsing the two would count an unmeasurable same-vehicle pair as a miss and
+  an unmeasurable different-vehicle pair as a correct reject — an error that
+  flatters both numbers at once.
+- **It refuses rather than compares** two descriptors of different versions, or
+  of different kinds, and the version refusal happens before a byte of the
+  payload is read.
+
+### Nothing is published about how well it matches
+
+`scripts/eval_fingerprint.py` is the harness that would answer that: it reads
+PAIRS of photographs of the same vehicle from outside every repository, reports
+the distance distributions and their separation threshold-free, fits any
+operating point on one half of the pairs and reports counts on the other, and
+states the exact upper bound beside every count so that a table of zeros cannot
+be read as a guarantee.
+
+It has not been run on real photographs. The set from the previous round is
+eighteen photographs of eighteen DIFFERENT vehicles, which cannot measure
+matching at all. Until pairs exist, the harness proves itself on a synthetic
+pair set it generates — `--write-synthetic` — whose numbers are invented, are
+marked as such in every file it writes, and measure nothing.
+
 ## What it does not do yet
 
-Make, model, colour, distinguishing appearance and re-identification are the
-next slice, written against this contract. Their fields exist in the record and
-are null. Nothing here invents them.
+Make, model, colour and re-identification are the next slice, written against
+this contract. Their fields exist in the record and are null. Nothing here
+invents them.
+
+Appearance re-identification specifically: the descriptor and the matcher exist
+and are tested, and **no threshold, no accuracy figure and no match decision
+does.** Do not build one on this field until the harness has been run on real
+pairs.
 
 ## Runs with no engine at all
 

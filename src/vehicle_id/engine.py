@@ -58,6 +58,7 @@ class PlateEngine:
         version: str = "",
         presence: PresenceDetector | None = None,
         recognizer=None,
+        descriptor=None,
     ) -> None:
         #: Injectable so that whether the presence gate is CONNECTED can be
         #: proven without a trained model. That is a different question from how
@@ -71,6 +72,18 @@ class PlateEngine:
         #: rather than assumed either way. A lane with no reference view of the
         #: empty tarmac behaves exactly as it did before this stage existed.
         self._presence = presence
+        #: The APPEARANCE descriptor, same shape and same default as presence:
+        #: absent unless asked for, and then `identity.descriptor` is null --
+        #: NOT MEASURED, not "this vehicle has no appearance". Anything with
+        #: `.compute(image) -> str`; `vehicle_id.fingerprint.DescriptorComputer`
+        #: is the one this package ships.
+        #:
+        #: Off by default on purpose. Most integrations today hand this engine a
+        #: tight plate CROP -- a caller replacing an LPR unit sends nothing else
+        #: -- and an appearance descriptor computed from a plate crop describes a
+        #: plate, not a vehicle. Whether it is worth computing is a property of
+        #: what the camera is pointed at, which only the operator knows.
+        self._descriptor = descriptor
         digest = weights_id(weights)
         self.threshold = _resolve_threshold(weights, digest, threshold)
         measured = load_operating_point(weights) or {}
@@ -175,9 +188,19 @@ class PlateEngine:
                 results.append((normalise(text), confidence, capture))
 
         if not results:
-            return self._record(captures, "", 0.0, None, disagreed=False, presence=presence)
+            # No plate, but a vehicle was photographed and a descriptor is a
+            # SEPARATE component of the identity. The record carries it, and its
+            # outcome is still `fallback` -- an appearance match is round B's
+            # question and nothing here stands behind one.
+            return self._record(
+                captures, "", 0.0, None, disagreed=False, presence=presence,
+                descriptor=self._describe(images[0] if images else None),
+            )
 
         best_text, best_confidence, best_capture = max(results, key=lambda r: r[1])
+        # The capture the ANSWER came from, so the descriptor and the plate on
+        # one record describe one photograph rather than two.
+        best_image = next((img for cap, img in decoded if cap is best_capture), None)
 
         # Two captures of one vehicle cannot show two DIFFERENT vehicles. They
         # can easily show two different readings of the same plate -- that is
@@ -209,8 +232,56 @@ class PlateEngine:
                 break
 
         return self._record(
-            captures, best_text, best_confidence, best_capture, disagreed, presence
+            captures, best_text, best_confidence, best_capture, disagreed, presence,
+            descriptor=self._describe(best_image),
         )
+
+    def _describe(self, image) -> str | None:
+        """The appearance descriptor for one image, or NOT MEASURED.
+
+        Never raises into the read path. A descriptor is one component of an
+        identity and the engine's promise is that it always returns a record; a
+        component that could not be computed is null, exactly like every other
+        component nothing measured.
+
+        There are TWO ways an injected computer fails, and both end here. That
+        is not tidiness: `descriptor=` is a PUBLISHED injection point -- the
+        docstring above says "anything with `.compute(image) -> str`" -- so what
+        comes back is a third party's value, and a published SHAPE is not an
+        enforced one. A computer that throws was caught from the first line of
+        this method. A computer that returns the wrong TYPE was not: the value
+        went on to `Identity(...)`, whose type check raised `ValueError` out of
+        a method whose own docstring promises no path through it raises. At a
+        barrier a raise is not an answer a lane can act on; an absent component
+        is, and it is the answer every other unmeasured component already gives.
+
+        One path, two log lines, and the line says which -- because "the
+        descriptor is always null" is diagnosed differently depending on whether
+        the computer is broken or the wrong object was passed. A caller who
+        writes `PlateEngine(weights, descriptor="orb")`, thinking the parameter
+        names a kind, arrives here through the first branch and is told so.
+        """
+        if self._descriptor is None or image is None:
+            return None
+        try:
+            text = self._descriptor.compute(image)
+        except Exception:  # noqa: BLE001 - a component, not the answer
+            log.warning(
+                "the appearance descriptor could not be computed: %s raised",
+                type(self._descriptor).__name__,
+                exc_info=True,
+            )
+            return None
+        if not isinstance(text, str):
+            log.warning(
+                "the appearance descriptor could not be computed: %s.compute "
+                "returned %s, and the injection point's published shape is "
+                "`.compute(image) -> str`",
+                type(self._descriptor).__name__,
+                type(text).__name__,
+            )
+            return None
+        return text
 
     def _record(
         self,
@@ -220,6 +291,7 @@ class PlateEngine:
         source: Capture | None,
         disagreed: bool,
         presence: Presence,
+        descriptor: str | None = None,
     ) -> Read:
         identity = Identity(
             plate=text or None,
@@ -229,6 +301,11 @@ class PlateEngine:
             model=None,
             color=None,
             marks=(),
+            # Null unless a descriptor computer was injected. The two paths that
+            # do NOT reach here with one are the two that must not: `presence is
+            # False` (the contract refuses an identity on a record claiming
+            # nothing was there) and a dead camera feed.
+            descriptor=descriptor,
         )
         # `presence is False` cannot answer, and cannot carry an identity --
         # the contract refuses such a record outright, so this is belt and
