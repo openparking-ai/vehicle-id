@@ -622,12 +622,18 @@ def arm(
     }
     out["bounds_95"] = {
         "miss_rate": {
-            "observed": miss_rate,
+            # NOT MEASURED, not zero. `rates_at` answers 0.0 for an empty class
+            # because a rate over nothing has no other arithmetic to give, and
+            # that 0.0 used to be published here beside `over: 0` -- the best
+            # possible value, manufactured, in the field a reader quotes. Same
+            # shape as `distribution` above and as `TermDistance`: the number is
+            # null exactly when there was nothing to compute it over.
+            "observed": miss_rate if report[SAME_CAR] else None,
             "upper": clopper_pearson_upper(misses, len(report[SAME_CAR])),
             "over": len(report[SAME_CAR]),
         },
         "false_match_rate": {
-            "observed": false_match_rate,
+            "observed": false_match_rate if report[DIFFERENT_CAR] else None,
             "upper": clopper_pearson_upper(false_matches, len(report[DIFFERENT_CAR])),
             "over": len(report[DIFFERENT_CAR]),
         },
@@ -635,7 +641,10 @@ def arm(
             "Clopper-Pearson, one-sided, 95%. Zero events does not mean a rate "
             "of zero: it means the rate is no worse than the bound, and with "
             "this many comparisons the bound is what the decision has to be "
-            "made on."
+            "made on. An `observed` of null means the report half held nothing "
+            "to measure -- `over` is 0 and no rate was computed. It is NOT a "
+            "measured rate of zero, and neither is the bound beside it, which "
+            "is null for the same reason."
         ),
     }
     out["straddling_comparisons_used_in_neither_half"] = straddling
@@ -781,8 +790,16 @@ def main(argv=None) -> int:
     #: default. The number a barrier would open on is not a default in a
     #: harness; these are the constraints this RUN was asked to satisfy, and the
     #: refusal names them when nothing does.
-    ap.add_argument("--max-false-match-rate", type=float, default=0.01)
-    ap.add_argument("--max-miss-rate", type=float, default=0.20)
+    #:
+    #: That was already written here while the two lines below carried 0.01 and
+    #: 0.20, so a run overriding nothing published counts under constraints that
+    #: read as operating policy and no one had chosen. `choose_operating_point`
+    #: takes no defaults and its docstring says why -- "a default here would be
+    #: a product decision made in a helper function" -- and the entry point then
+    #: made exactly that decision one layer up. The defaults are gone; the
+    #: comment is now true.
+    ap.add_argument("--max-false-match-rate", type=float)
+    ap.add_argument("--max-miss-rate", type=float)
     ap.add_argument("--write-synthetic", type=Path)
     ap.add_argument("--pairs", type=int, default=8)
     ap.add_argument("--flat", type=int, default=1)
@@ -795,9 +812,22 @@ def main(argv=None) -> int:
         print("  its numbers are invented and are not a measurement of anything")
         return 0
 
-    missing = [n for n in ("photos", "index", "out") if getattr(args, n) is None]
+    # The two constraints join this list rather than becoming argparse
+    # `required=True`: `--write-synthetic` writes a pair set, chooses no
+    # operating point and counts nothing, so requiring them at parse time would
+    # refuse a run that needs neither. Refused HERE, on the measuring path only,
+    # by the refusal this harness already ships for a missing path.
+    missing = [
+        n
+        for n in ("photos", "index", "out", "max_false_match_rate", "max_miss_rate")
+        if getattr(args, n) is None
+    ]
     if missing:
-        ap.error("--" + ", --".join(missing) + " are required unless --write-synthetic is given")
+        ap.error(
+            "--"
+            + ", --".join(n.replace("_", "-") for n in missing)
+            + " are required unless --write-synthetic is given"
+        )
 
     refuse_repository_paths(photos=args.photos, index=args.index, out=args.out)
     index = json.loads(args.index.read_text(encoding="utf-8"))

@@ -608,8 +608,8 @@ class _ReturnsBytes:
     third party's computer can return anything. A non-string used to travel
     past `_describe` -- which caught only exceptions -- into `Identity(...)`,
     where the contract's type check raised `ValueError` out of `read()`, a
-    method whose own docstring promises no path through it raises. The engine
-    was only ever this honest about the failures it had imagined.
+    method whose own docstring promises it answers rather than raising. The
+    engine was only ever this honest about the failures it had imagined.
     """
 
     def compute(self, image):
@@ -638,9 +638,11 @@ class _ReturnsNone:
     ],
 )
 def test_a_descriptor_that_cannot_be_computed_is_null_and_not_an_exception(descriptor):
-    """A component, not the answer. The engine's promise is that there is no
-    path through `read` that raises instead of answering, and no descriptor
-    computer must become the first one.
+    """A component, not the answer. The engine's promise is that no ORDINARY
+    failure inside `read` raises instead of answering, and no descriptor
+    computer must become the first one. The promise is not stated over
+    `BaseException` and this test does not assert one: `SystemExit` and
+    `KeyboardInterrupt` propagate by design, which `read()`'s docstring says.
 
     Parametrised over BOTH axes that reach the guard, because it previously
     varied only one of them: the fixture built a computer that THREW, the
