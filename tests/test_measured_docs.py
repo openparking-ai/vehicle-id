@@ -88,9 +88,10 @@ def test_every_figure_a_document_states_matches_the_measurement(measured):
                     f"but the measurement is {measured[key]!r}"
                 )
     assert not wrong, (
-        "a document disagrees with docs/measured/presence.json:\n  "
+        "a document disagrees with the measurement:\n  "
         + "\n  ".join(wrong)
-        + "\n\nRe-measure with `python scripts/eval_presence.py --update-docs`. "
+        + "\n\nRe-measure with `python scripts/eval_presence.py --update-docs`, or "
+        "for a `plates.` key `python scripts/eval_plates.py --update-docs`. "
         "Do not edit the number by hand."
     )
 
@@ -112,6 +113,106 @@ def test_the_check_catches_an_edited_number(measured):
     (found_key, stated), = cited(tampered)
     assert found_key == key
     assert stated != measured[key]
+
+
+# --- the plate ladder's own figures ---------------------------------------
+#
+# `README:196-197` published an operating point of 0.87% silent-wrong and 30.9%
+# fallback while the harness measured 0.80% and 30.6% -- and it had, since
+# before the round that found it. Nothing could see it, because those figures
+# were hand-written: no command produced them, so no test could compare them
+# against anything. They are spans now, and the checks above cover them by
+# construction. What is below is what those checks CANNOT do on their own.
+
+
+@guarantee
+def test_the_plate_operating_point_is_cited_rather_than_typed(measured):
+    """The emptiness control for the plate half specifically.
+
+    `test_the_documents_actually_cite_something` counts ALL spans, so deleting
+    every plate span and leaving the presence ones would keep it green at 20-odd
+    citations. This one asks for the plate figures by name.
+    """
+    stated = {}
+    for document in DOCUMENTS:
+        for key, value in cited((ROOT / document).read_text(encoding="utf-8")):
+            if key.startswith("plates."):
+                stated[key] = value
+
+    for required in ("plates.operating_point", "plates.silent_wrong", "plates.fallback"):
+        assert required in stated, f"{required} is not cited by any document any more"
+        assert stated[required] == measured[required]
+
+    # And the provenance. `models/` is gitignored, so before this file existed
+    # NO file in the repository recorded which checkpoint produced the published
+    # plate figures.
+    assert stated.get("plates.weights", "").startswith("sha256:"), (
+        "the documents no longer name the checkpoint the plate figures were "
+        "measured on"
+    )
+
+
+@guarantee
+def test_a_refused_operating_point_is_published_as_a_refusal(evidence):
+    """The case the mechanism exists for, and it cannot be reached by editing.
+
+    When the chooser refuses -- as it does for weights whose constraints
+    conflict -- the document must not go on printing the last operating point it
+    was given. Perturbing the evidence is the only way to see this, because the
+    repository's own evidence is a run that succeeded.
+    """
+    import copy
+
+    refused = copy.deepcopy(evidence)
+    refused["plates"]["operating_point"] = None
+    rendered = figures(refused)
+
+    for key in ("plates.operating_point", "plates.silent_wrong", "plates.fallback"):
+        assert "REFUSED" in rendered[key], f"{key} still renders a number after a refusal"
+
+    # The control for the control: the real evidence does NOT render a refusal.
+    assert "REFUSED" not in figures(evidence)["plates.operating_point"]
+
+
+@guarantee
+def test_the_naive_comparison_must_be_a_row_the_run_actually_measured(evidence):
+    """`README` contrasts the operating point with "a naive 0.85".
+
+    That 0.85 has to be one of the thresholds the ladder measured, or the
+    document compares the measured point against a number from nowhere. Two
+    copies of a threshold that agree today are the shape this repository keeps
+    finding.
+    """
+    import copy
+
+    assert figures(evidence)["plates.naive_silent_wrong"].endswith("%")
+
+    off = copy.deepcopy(evidence)
+    off["plates"]["naive_threshold"] = 0.8675
+    with pytest.raises(AssertionError, match="not one of the candidates measured"):
+        figures(off)
+
+
+@guarantee
+def test_the_plate_evidence_is_required_rather_than_optional(tmp_path):
+    """An absent evidence file must be loud.
+
+    `.get("plates") or {}` would make "nobody has measured this" and "the
+    document agrees with the measurement" the same green run.
+    """
+    import shutil
+
+    from measured_figures import EVIDENCE, PLATES_EVIDENCE
+
+    (tmp_path / EVIDENCE.parent).mkdir(parents=True)
+    shutil.copy(ROOT / EVIDENCE, tmp_path / EVIDENCE)
+    with pytest.raises(FileNotFoundError):
+        load_evidence(tmp_path)
+
+    # The control: with the file in place it loads, so the refusal above is
+    # about the missing file and not about the temporary directory.
+    shutil.copy(ROOT / PLATES_EVIDENCE, tmp_path / PLATES_EVIDENCE)
+    assert load_evidence(tmp_path)["plates"]["weights_id"].startswith("sha256:")
 
 
 # --- the sentences -------------------------------------------------------

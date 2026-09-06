@@ -65,6 +65,16 @@ from pathlib import Path
 from vehicle_id.presence import STREAK_CONDITION
 
 EVIDENCE = Path("docs/measured/presence.json")
+#: The plate ladder's own evidence, written by `eval_plates.py --update-docs`.
+#: A second file rather than a second section of the first, because a different
+#: command measures it and the two are re-measured independently -- one file
+#: would make a stale half indistinguishable from a fresh one.
+#:
+#: It exists because README:196-197 published an operating point of 0.87%
+#: silent-wrong and 30.9% fallback while the harness measured 0.80% and 30.6%,
+#: and had done since before this round. Nothing could see it: the figures were
+#: hand-written, so no command produced them and no test compared them.
+PLATES_EVIDENCE = Path("docs/measured/plates.json")
 SPAN = re.compile(r"<!--m:([a-z0-9_.]+)-->(.*?)<!--/m-->", re.DOTALL)
 # The body may not contain another marker. Without that guard an EMPTY
 # placeholder -- `<!--mb:k-->\n<!--/mb-->`, one newline, no body -- cannot match
@@ -262,7 +272,57 @@ def figures(evidence: dict) -> dict[str, str]:
         out["noise.three_capture"] = _rate(noise["no_gate_3_capture"], reads, seeds)
         out["noise.gated_one_capture"] = _rate(noise["gated_1_capture"], reads, seeds)
         out["noise.gated_three_capture"] = _rate(noise["gated_3_capture"], reads, seeds)
+
+    out.update(_plate_figures(evidence["plates"]))
     return out
+
+
+def _plate_figures(plates: dict) -> dict[str, str]:
+    """The plate ladder's cited values, and every one of them is PRODUCED.
+
+    The operating point and both its rates come from the chooser's own output,
+    the naive comparison from the row of the same table, and the checkpoint id
+    from the file the run read -- so a document can no longer state a plate
+    figure that no command wrote. Before this, `README:196-197` stated 0.87% and
+    30.9% against a measured 0.80% and 30.6%.
+    """
+    out: dict[str, str] = {}
+    out["plates.weights"] = plates.get("weights_id") or "AN UNRECORDED ARTEFACT"
+    out["plates.max_silent_wrong"] = _trim(plates["max_silent_wrong_pct"]) + "%"
+    out["plates.clean_confidence"] = f"{plates['clean_plate_confidence']:.4f}"
+    out["plates.noise_ceiling"] = f"{plates['noise_confidence_ceiling']:.4f}"
+
+    point = plates["operating_point"]
+    if point is None:
+        # The chooser refused for these weights. Say so, in the words the
+        # document will then carry -- a document that keeps printing the LAST
+        # operating point is exactly the drift this mechanism exists to stop.
+        refused = "REFUSED: no threshold satisfies every constraint on these weights"
+        out["plates.operating_point"] = refused
+        out["plates.silent_wrong"] = refused
+        out["plates.fallback"] = refused
+    else:
+        out["plates.operating_point"] = _trim(point["threshold"])
+        out["plates.silent_wrong"] = f"{point['silent_wrong_pct']:.2f}%"
+        out["plates.fallback"] = f"{point['fallback_pct']:.1f}%"
+
+    naive = plates["naive_threshold"]
+    out["plates.naive_threshold"] = _trim(naive)
+    row = next(
+        (c for c in plates["candidates"] if c["threshold"] == naive),
+        None,
+    )
+    assert row is not None, (
+        f"the naive threshold {naive} is not one of the candidates measured; "
+        "the document would compare against a number this run never took"
+    )
+    out["plates.naive_silent_wrong"] = f"{row['silent_wrong_pct']:.2f}%"
+    return out
+
+
+def _trim(value: float) -> str:
+    """0.99 rather than 0.990, 1% rather than 1.0%. The form documents use."""
+    return f"{value:g}"
 
 
 # --- the generated sections, claim by claim ------------------------------
@@ -920,8 +980,16 @@ def control_key(path: str) -> str:
 
 
 def load_evidence(root: Path | None = None) -> dict:
-    path = (root or Path.cwd()) / EVIDENCE
-    return json.loads(path.read_text(encoding="utf-8"))
+    """Both evidence files, merged under one key each.
+
+    The plate file is REQUIRED, not optional. An optional evidence file makes
+    "the measurement is missing" and "the measurement agrees" the same green
+    run, which is the failure this whole module exists to prevent.
+    """
+    base = root or Path.cwd()
+    evidence = json.loads((base / EVIDENCE).read_text(encoding="utf-8"))
+    evidence["plates"] = json.loads((base / PLATES_EVIDENCE).read_text(encoding="utf-8"))
+    return evidence
 
 
 def cited(text: str) -> list[tuple[str, str]]:

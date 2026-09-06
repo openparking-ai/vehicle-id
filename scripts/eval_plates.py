@@ -20,15 +20,32 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import sys
 import time
 from pathlib import Path
 
 import torch
 
+from vehicle_id.engine import weights_id
 from vehicle_id.plates.dataset import EVAL_SEED
 from vehicle_id.plates.generator import PlateGenerator
 
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+
 LADDER = list(range(0, 10))
+
+#: What this harness writes so the documents can cite it. `docs/measured/` is
+#: the only place a published plate figure may come from; `models/` is
+#: gitignored, so the operating-point sidecar cannot serve -- no file in the
+#: repository recorded which checkpoint produced the published plate figures,
+#: and this is that file.
+PLATES_EVIDENCE = Path("docs/measured/plates.json")
+
+#: The threshold the README contrasts the measured operating point against.
+#: Named here so the document's "at a naive 0.85" and the measured 0.85 row are
+#: one number rather than two that agree today.
+NAIVE_THRESHOLD = 0.85
 
 
 def normalise(text: str) -> str:
@@ -123,6 +140,145 @@ def noise_ceiling(reader, count: int = 200) -> float:
     return best
 
 
+#: The thresholds the operating point is chosen from. A list, so the chosen
+#: point is reproducible and comparable between runs -- and note that its TOP is
+#: a real limit: a model needing more than 0.995 has no candidate here at all,
+#: which is a refusal for a reason that has nothing to do with the model.
+CANDIDATE_THRESHOLDS = (0.0, 0.50, 0.80, 0.85, 0.90, 0.95, 0.97, 0.98, 0.99, 0.995)
+
+#: A silent wrong answer bills a stranger's car to somebody else; a fallback
+#: costs an operator a glance. Published, and the reason the chooser exists.
+MAX_SILENT_WRONG_PCT = 1.0
+
+
+class NoOperatingPoint(Exception):
+    """No candidate threshold satisfies every constraint on these weights.
+
+    Carries the numbers that conflict. Raised rather than returned as a None
+    that a caller can forget to check, and rather than quietly writing the
+    cheapest candidate that meets ONE of the three -- which is what this file
+    used to do, and it wrote 0.995 for a model whose pristine plates answer only
+    at 0.99 and whose noise ceiling sits at 0.9004.
+    """
+
+    def __init__(self, message: str, conflicts: dict) -> None:
+        super().__init__(message)
+        self.conflicts = conflicts
+
+
+def choose_operating_point(
+    rows,
+    *,
+    clean_plate_confidence: float,
+    noise_confidence_ceiling: float,
+    max_silent_wrong_pct: float = MAX_SILENT_WRONG_PCT,
+) -> dict:
+    """The operating point, or a refusal naming the numbers that conflict.
+
+    `rows` is one `(threshold, silent_wrong_pct, fallback_pct)` per candidate,
+    cheapest first. Three constraints, all three MEASURED for these weights, and
+    each one is a published guarantee rather than a preference:
+
+      * **silent-wrong under the bar.** The original, and until this round the
+        only one. `silent_wrong_pct < max_silent_wrong_pct`.
+
+      * **pristine plates are answered.** `threshold <= clean_plate_confidence`,
+        the median confidence of correctly-read undegraded plates. A point above
+        it sends the typical clean plate to fallback, which is the guarantee two
+        of this suite's tests assert directly. The chooser had NO such
+        constraint: silent-wrong falls monotonically as the threshold rises, so
+        left alone the rule always prefers the strictest candidate, and the
+        strictest candidate is the one most likely to refuse clean plates.
+
+      * **the gate's noise measurement stays possible.**
+        `threshold <= noise_confidence_ceiling`. The ceiling is the highest
+        confidence this model gives an image with no plate in it. Below the
+        threshold, no noise frame can clear the operating point, so the ungated
+        control in `test_the_presence_gate_moves_the_noise_measurement` answers
+        zero by construction and the gate's ACCURACY becomes unmeasurable. The
+        same function measured this number eleven lines further down and did not
+        consult it.
+
+    Unsure is a first-class answer here, exactly as it is at the barrier. When
+    the constraints cannot all be met, the correct output is a refusal that
+    names the numbers -- not a threshold that satisfies whichever one was
+    checked first.
+    """
+    qualifying = []
+    for threshold, silent, fallback in rows:
+        failed = []
+        if not silent < max_silent_wrong_pct:
+            failed.append("silent_wrong")
+        if threshold > clean_plate_confidence:
+            failed.append("clean_plate")
+        if threshold > noise_confidence_ceiling:
+            failed.append("noise_ceiling")
+        if not failed:
+            qualifying.append((threshold, silent, fallback))
+
+    if qualifying:
+        threshold, silent, fallback = qualifying[0]
+        return {
+            "threshold": threshold,
+            "silent_wrong_pct": silent,
+            "fallback_pct": fallback,
+            "clean_plate_confidence": clean_plate_confidence,
+            "noise_confidence_ceiling": noise_confidence_ceiling,
+        }
+
+    # The refusal, and it names every number a reader would need to check it.
+    meeting_silent = [t for t, s, _ in rows if s < max_silent_wrong_pct]
+    ceiling = min(clean_plate_confidence, noise_confidence_ceiling)
+    binding = (
+        "clean-plate confidence"
+        if clean_plate_confidence <= noise_confidence_ceiling
+        else "noise confidence ceiling"
+    )
+    lines = [
+        "no candidate threshold satisfies every constraint on these weights:",
+        f"    silent-wrong < {max_silent_wrong_pct:.2f}%  needs threshold >= "
+        + (f"{meeting_silent[0]:.3f}" if meeting_silent else "MORE THAN ANY CANDIDATE"),
+        f"    pristine plates answered  needs threshold <= {clean_plate_confidence:.4f}"
+        "  (median confidence of correctly-read undegraded plates)",
+        f"    gate noise measurable     needs threshold <= {noise_confidence_ceiling:.4f}"
+        "  (measured noise confidence ceiling)",
+    ]
+    if meeting_silent:
+        lines.append(
+            f"    the binding pair: {meeting_silent[0]:.3f} against {ceiling:.4f} "
+            f"({binding}). No threshold sits between them."
+        )
+    else:
+        lines.append(
+            f"    no candidate up to {max(t for t, _, _ in rows):.3f} reaches the "
+            "silent-wrong bar at all; the candidate list itself is the limit."
+        )
+    raise NoOperatingPoint(
+        "\n".join(lines),
+        {
+            "max_silent_wrong_pct": max_silent_wrong_pct,
+            "lowest_threshold_meeting_silent_wrong": meeting_silent[0] if meeting_silent else None,
+            "clean_plate_confidence": clean_plate_confidence,
+            "noise_confidence_ceiling": noise_confidence_ceiling,
+            "highest_candidate": max(t for t, _, _ in rows) if rows else None,
+        },
+    )
+
+
+def median_clean_confidence(confidences: list[float]) -> float:
+    """Median confidence over the pristine plates this model reads CORRECTLY.
+
+    Correctly-read only: a wrong read's confidence says nothing about whether
+    the operating point admits a good one. Median, because that is the statistic
+    the suite's own `clean_confidence` fixture uses -- here on the ladder's rung
+    0, which is larger and reproducible from `EVAL_SEED`.
+    """
+    if not confidences:
+        return 0.0
+    ordered = sorted(confidences)
+    return ordered[len(ordered) // 2]
+
+
 def timing(reader, samples, label: str) -> float:
     reader.read(samples[0].image)
     times = []
@@ -146,6 +302,14 @@ def main() -> int:
         action="store_true",
         help="record the measured operating point beside the weights, so the "
              "engine can apply a number that was measured for THESE weights",
+    )
+    ap.add_argument(
+        "--update-docs",
+        action="store_true",
+        help="write docs/measured/plates.json and rewrite the figures the "
+             "documents cite from it. A published figure is PRODUCED by a "
+             "command, not typed: README:196-197 published 0.87%% / 30.9%% "
+             "against a measurement of 0.80%% / 30.6%% and nothing could see it.",
     )
     args = ap.parse_args()
 
@@ -198,52 +362,91 @@ def main() -> int:
     print("   A raw score is not a threshold. Our recogniser is ACCURATE and")
     print("   OVERCONFIDENT: mean confidence barely moves across the ladder while")
     print("   accuracy falls. So the operating point has to be measured, not chosen.")
+    plate_evidence = None
     for name, reader in readers.items():
         print(f"\n   {name}")
         print(f"     {'threshold':>9}  {'answers':>8}  {'of those wrong':>15}  {'-> fallback':>11}")
         pairs = []
+        clean_correct = []
         for rung in LADDER:
             for sample in sets[rung]:
                 got, conf = reader.read(sample.image)
-                pairs.append((conf, normalise(got) == normalise(sample.text)))
+                ok = normalise(got) == normalise(sample.text)
+                pairs.append((conf, ok))
+                # Rung 0 is the pristine set. Kept here rather than re-read, so
+                # the clean-plate constraint costs nothing and is measured on
+                # exactly the samples the table above reports.
+                if rung == 0 and ok:
+                    clean_correct.append(conf)
         total = len(pairs)
-        best = None
-        for threshold in (0.0, 0.50, 0.80, 0.85, 0.90, 0.95, 0.97, 0.98, 0.99, 0.995):
+        rows = []
+        for threshold in CANDIDATE_THRESHOLDS:
             answered = [ok for conf, ok in pairs if conf >= threshold]
             wrong = sum(1 for ok in answered if not ok)
             silent = 100.0 * wrong / total
+            fallback = 100.0 * (total - len(answered)) / total
             print(f"     {threshold:>9.3f}  {len(answered):>8}  {wrong:>7} ({silent:>5.2f}%)  "
-                  f"{100.0 * (total - len(answered)) / total:>10.1f}%")
-            # The operating point: the cheapest threshold that gets silent-wrong
-            # under 1%. A fallback costs an operator a glance; a silent wrong
-            # answer bills a stranger's car to somebody else.
-            if best is None and silent < 1.0:
-                best = (threshold, silent, 100.0 * (total - len(answered)) / total)
-        if best:
-            print(f"     -> operating point {best[0]:.3f}: silent-wrong {best[1]:.2f}%, "
-                  f"fallback {best[2]:.1f}%")
+                  f"{fallback:>10.1f}%")
+            rows.append((threshold, silent, fallback))
+
+        # The two constraints the chooser used to ignore, MEASURED for these
+        # weights before it runs rather than eleven lines after it.
+        clean = median_clean_confidence(clean_correct)
+        ceiling = noise_ceiling(reader)
+        print(f"     clean-plate confidence (rung 0, correct reads, median): {clean:.4f}")
+        print(f"     noise confidence ceiling: {ceiling:.4f}")
+
+        try:
+            point = choose_operating_point(
+                rows, clean_plate_confidence=clean, noise_confidence_ceiling=ceiling
+            )
+        except NoOperatingPoint as refusal:
+            point = None
+            print(f"     -> REFUSED: {refusal}")
         else:
-            print("     -> NO threshold reaches <1% silent-wrong on this ladder.")
+            print(f"     -> operating point {point['threshold']:.3f}: "
+                  f"silent-wrong {point['silent_wrong_pct']:.2f}%, "
+                  f"fallback {point['fallback_pct']:.1f}%")
+
+        if name.startswith("ours"):
+            plate_evidence = {
+                "weights_id": weights_id(args.weights),
+                "per_rung": args.per_rung,
+                "rungs": len(LADDER),
+                "eval_seed": EVAL_SEED,
+                "max_silent_wrong_pct": MAX_SILENT_WRONG_PCT,
+                "clean_plate_confidence": clean,
+                "noise_confidence_ceiling": ceiling,
+                "candidates": [
+                    {"threshold": t, "silent_wrong_pct": s, "fallback_pct": f}
+                    for t, s, f in rows
+                ],
+                "operating_point": point,
+                "naive_threshold": NAIVE_THRESHOLD,
+            }
 
         if args.write_operating_point and name.startswith("ours"):
-            if not best:
+            if point is None:
                 # Refusing to write one is the honest outcome: these weights have
-                # no operating point that meets the bar, and the engine must not
-                # be handed a number that pretends otherwise.
+                # no operating point that meets every bar, and the engine must
+                # not be handed a number that pretends otherwise. The engine then
+                # refuses to start, which is the correct end of this path -- a
+                # model with no admissible operating point is not one to run a
+                # barrier on.
                 print("     -> NOT written: no threshold on this ladder qualifies.")
             else:
                 from vehicle_id.engine import write_operating_point
 
                 spread = same_vehicle_spread(reader, sets)
-                ceiling = noise_ceiling(reader)
                 print(f"     -> same-vehicle reading spread (p99.5): {spread:.0f} characters")
-                print(f"     -> noise confidence ceiling: {ceiling:.4f}")
                 written = write_operating_point(
                     args.weights,
-                    best[0],
+                    point["threshold"],
                     {
-                        "silent_wrong_pct": best[1],
-                        "fallback_pct": best[2],
+                        "silent_wrong_pct": point["silent_wrong_pct"],
+                        "fallback_pct": point["fallback_pct"],
+                        "clean_plate_confidence": clean,
+                        "max_silent_wrong_pct": MAX_SILENT_WRONG_PCT,
                         "per_rung": args.per_rung,
                         "rungs": len(LADDER),
                         "eval_seed": EVAL_SEED,
@@ -265,6 +468,31 @@ def main() -> int:
     if args.json_out:
         args.json_out.write_text(json.dumps(results, indent=2))
         print(f"\n wrote {args.json_out}")
+
+    if args.update_docs:
+        # `plate_evidence` is bound by the "ours" arm above, which is always in
+        # `readers`. Asserted rather than assumed, because a silent `None` here
+        # would write an empty evidence file over a good one.
+        assert plate_evidence is not None, "no measurement for our own recogniser"
+        PLATES_EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
+        PLATES_EVIDENCE.write_text(
+            json.dumps(plate_evidence, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"\n wrote {PLATES_EVIDENCE}")
+
+        from measured_figures import DOCUMENTS, blocks, figures, load_evidence, rewrite
+
+        evidence = load_evidence(ROOT)
+        values, rendered = figures(evidence), blocks(evidence)
+        for document in DOCUMENTS:
+            path = ROOT / document
+            before = path.read_text(encoding="utf-8")
+            after = rewrite(before, values, rendered)
+            if after != before:
+                path.write_text(after, encoding="utf-8")
+                print(f" updated the cited figures in {document}")
+            else:
+                print(f" {document} already matches the measurement")
     print()
     return 0
 

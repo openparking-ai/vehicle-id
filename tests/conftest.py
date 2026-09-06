@@ -44,6 +44,15 @@ GUARANTEE_MODULES = (
     # torch or cv2, so neither has a reason to skip -- which is exactly why a
     # skip here should stop the build rather than pass unnoticed.
     "test_exposure.py",
+    # The plate-string guard. `check-no-real-data.js` matches e-mail addresses
+    # and cannot fire on a registration, so the promise that no plate reaches a
+    # file is proven here and nowhere else -- and this module opens with
+    # `importorskip`, which is exactly the shape that vanished silently before.
+    "test_eval_real_plates.py",
+    # The operating-point chooser. It picks the number the engine applies to
+    # every read, and the constraint that stops it choosing one that breaks a
+    # published guarantee is proven here and nowhere else.
+    "test_operating_point.py",
 )
 
 _skipped: list[tuple[str, str]] = []
