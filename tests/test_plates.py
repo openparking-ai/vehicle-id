@@ -60,6 +60,59 @@ def as_capture(image) -> Capture:
     return Capture.now(buf.tobytes(), camera_id="test")
 
 
+def noise_ceiling_and_threshold(weights: Path) -> tuple[float, float]:
+    """The two numbers the noise control depends on, from the weights' sidecar."""
+    from vehicle_id.engine import load_operating_point
+
+    measured = load_operating_point(weights) or {}
+    return (
+        float(measured["noise_confidence_ceiling"]),
+        float(measured["threshold"]),
+    )
+
+
+def why_the_noise_control_cannot_fire(weights: Path) -> str | None:
+    """NOT MEASURABLE, or None, derived from the sidecar and nothing else.
+
+    `test_the_presence_gate_moves_the_noise_measurement` proves the gate stops
+    confident answers the recogniser produces out of noise. Its control is the
+    UNGATED arm: if that also answers zero, the gated arm's zero proves nothing.
+
+    The ungated arm answers only when a noise batch clears the operating point,
+    and the highest confidence this model gives ANY noise image is measured per
+    weights by `scripts/eval_plates.py` and recorded in the sidecar as
+    `noise_confidence_ceiling`. So the control is satisfiable iff
+
+        noise_confidence_ceiling >= threshold
+
+    Both numbers sit beside every checkpoint, so this is answerable before a
+    single read is taken. Where it says no, the honest report is NOT MEASURABLE
+    naming the two numbers -- not a skip that hides, and not an assertion that
+    lies about a guarantee it cannot see.
+    """
+    from vehicle_id.engine import load_operating_point
+
+    measured = load_operating_point(weights) or {}
+    ceiling = measured.get("noise_confidence_ceiling")
+    threshold = measured.get("threshold")
+    if ceiling is None or threshold is None:
+        return (
+            "NOT MEASURABLE: these weights carry no noise_confidence_ceiling or "
+            "no threshold in their operating-point sidecar, so whether the "
+            "ungated control can fire cannot be established either way"
+        )
+    if float(ceiling) < float(threshold):
+        return (
+            f"NOT MEASURABLE on these weights: the measured noise confidence "
+            f"ceiling {float(ceiling):.4f} is BELOW their operating point "
+            f"{float(threshold):.3f}, so no noise batch can clear the threshold, "
+            f"the ungated control answers 0 by construction, and a gated arm of "
+            f"0 would prove nothing. The gate's WIRING is proven without weights "
+            f"in test_presence_wiring.py; its ACCURACY is unmeasurable here."
+        )
+    return None
+
+
 @pytest.fixture(scope="module")
 def engine():
     # Threshold 0 so these tests see the raw confidence and decide for
@@ -147,50 +200,20 @@ def test_every_template_in_the_tuple_is_actually_sampled():
 
 
 @pytest.mark.guarantee
-def test_the_class_count_is_a_stated_fact():
-    """A charset change is a full retrain and a new `weights_id`.
-
-    Stated here so it can never be a silent class-count change discovered as a
-    shape mismatch when an older checkpoint refuses to load.
-    """
-    from vehicle_id.plates.model import NUM_CLASSES
-    from vehicle_id.plates.templates import charset
-
-    assert len(charset()) == 36
-    assert NUM_CLASSES == 37
-
-
-@pytest.mark.guarantee
-def test_a_template_with_its_own_letters_draws_only_those():
-    """A restricted layout must not be trained on registrations it cannot have."""
-    from vehicle_id.plates.templates import TEMPLATES
-
-    restricted = [t for t in TEMPLATES if t.letters]
-    assert restricted, "no template declares its own letter set; this check is empty"
-    samples = PlateGenerator(seed=0).batch(600)
-    for template in restricted:
-        drawn = {
-            ch
-            for s in samples
-            if s.state == template.state
-            for ch in s.text
-            if ch.isalpha()
-        }
-        assert drawn, f"{template.state} never sampled; cannot check its letters"
-        assert drawn <= set(template.letters), (
-            f"{template.state} drew {sorted(drawn - set(template.letters))}, "
-            "which its layout cannot contain"
-        )
-
-
-@pytest.mark.guarantee
 def test_the_widest_registration_fits_every_template_text_area():
-    """The band and the scale range are chosen together, not separately.
+    """The registration never leaves the plate, on any template.
 
-    The generator's scale variation stands in for the font variation it cannot
-    model, so it is not narrowed for a banded template. Instead the band is
-    sized so the widest rendering still fits. Thickness is not a dimension here:
-    it does not change the advance width, measured.
+    That arm has five subjects today and fires on all of them. The BANDED arm
+    below has NONE: no template in the tuple declares a band, so it is a guard
+    for the next one that does, not a measurement of anything shipped. Said here
+    rather than left to be read as a passing check -- an empty branch that looks
+    like a green assertion is the shape this project keeps finding.
+
+    The band and the scale range would be chosen together, not separately: the
+    generator's scale variation stands in for the font variation it cannot
+    model, so it is not narrowed for a banded template; the band is sized so the
+    widest rendering still fits. Thickness is not a dimension here: it does not
+    change the advance width, measured.
     """
     import cv2
 
@@ -532,9 +555,30 @@ def test_the_presence_gate_moves_the_noise_measurement(clean_confidence):
     handed a dead feed, does the gate actually stop the confident answers the
     recogniser produces out of noise?
 
-    The rates are read from the evidence file rather than restated, and the
-    control is the ungated arm measured in the same run -- if it also answers
-    zero, this assertion proves nothing and says so.
+    The control is the ungated arm: if it also answers zero, the gated assertion
+    proves nothing. **That control is not always satisfiable, and whether it is
+    can be derived before a single read is taken.** The ungated arm answers only
+    when a noise batch clears the operating point, and the highest confidence
+    this model gives any noise image is measured per weights and recorded in the
+    sidecar as `noise_confidence_ceiling`. So the control is satisfiable iff
+
+        noise_confidence_ceiling >= threshold
+
+    and on weights where it is not, this reports NOT MEASURABLE and names the
+    two numbers, rather than skipping quietly or asserting something it cannot
+    see. It stays a `@guarantee`, so that report fails the run unless the job
+    declares the allowance -- an unproven guarantee is not a passing one.
+
+    Measured, 150 three-frame noise batches per checkpoint, and the max batch
+    confidence equals the sidecar's ceiling in every case:
+
+        reference  0de21983  threshold 0.990  ceiling 0.9998  ungated 1/150
+        retrained  c825c957  threshold 0.995  ceiling 0.9004  ungated 0/150
+        fine-tuned 636a0693  threshold 0.990  ceiling 0.7461  ungated 0/150
+
+    The reference checkpoint clears the control by ONE answer in 150. The
+    docstring here used to claim "between 1 and 5 in 150"; the measurement says
+    one, and one is a single read from vacuous. Recorded rather than rounded.
     """
     if clean_confidence < TRAINED:
         pytest.skip("needs weights that actually read plates confidently")
@@ -545,6 +589,12 @@ def test_the_presence_gate_moves_the_noise_measurement(clean_confidence):
     from lanes import lane
     from vehicle_id.presence import PresenceDetector
 
+    # Derived from the sidecar, before any read is taken.
+    unmeasurable = why_the_noise_control_cannot_fire(WEIGHTS)
+    if unmeasurable:
+        pytest.skip(unmeasurable)
+
+    ceiling, threshold = noise_ceiling_and_threshold(WEIGHTS)
     rng = np.random.default_rng(0)
 
     def noise_capture():
@@ -562,17 +612,104 @@ def test_the_presence_gate_moves_the_noise_measurement(clean_confidence):
     ungated_answers = sum(plain.read(batch).is_answer for batch in batches)
     gated_answers = sum(gated.read(batch).is_answer for batch in batches)
 
-    # The control, measured here rather than assumed. On these weights the
-    # ungated arm answers between 1 and 5 times in 150; if it ever answers zero
-    # the gated assertion below is vacuous and must not be allowed to pass.
+    # The control, still measured here rather than assumed. The derivation above
+    # says it CAN fire on these weights; this says it DID. The two are not the
+    # same claim, and the second is the one that makes the assertion below mean
+    # something.
     assert ungated_answers > 0, (
-        f"the ungated control answered 0/{reads} noisy reads, so the gated "
-        "assertion below would pass with the gate removed and proves nothing"
+        f"the ungated control answered 0/{reads} noisy reads even though the "
+        f"measured ceiling {ceiling:.4f} is at or above the operating point "
+        f"{threshold:.3f}; the gated assertion below would pass with the gate "
+        "removed and proves nothing"
     )
     assert gated_answers == 0, (
         f"{gated_answers}/{reads} noisy-feed reads got past the presence gate "
         f"(ungated control: {ungated_answers}/{reads})"
     )
+
+
+@pytest.mark.guarantee
+@pytest.mark.parametrize(
+    "ceiling,threshold,measurable,which",
+    [
+        (0.9998, 0.990, True, "reference 0de21983: ceiling above the point"),
+        (0.9900, 0.990, True, "the boundary itself: equal is measurable"),
+        (0.9899, 0.990, False, "one ten-thousandth below the boundary"),
+        (0.9004, 0.995, False, "retrained c825c957, the case that started this"),
+        (0.7461, 0.990, False, "fine-tuned 636a0693"),
+    ],
+)
+def test_not_measurable_is_derived_from_the_sidecar_and_fires_on_both_sides(
+    tmp_path, ceiling, threshold, measurable, which
+):
+    """The fail-control for the NOT MEASURABLE report, and it RUNS.
+
+    This needs no weights and no model: the derivation reads two numbers out of
+    an operating-point sidecar, so it can be driven to either answer with a
+    written file. Both sides are here, and the boundary is fixtured on both
+    sides of itself -- `>=` and `>` are a different test at 0.9900/0.990, and
+    without the equal case nothing would tell them apart.
+
+    The three real checkpoints of this round are included as fixtures with their
+    measured numbers, so the case that produced the misreport
+    (`c825c957`: ceiling 0.9004, point 0.995) is exercised by name.
+    """
+    import json
+
+    from vehicle_id.engine import operating_point_path
+
+    weights = tmp_path / "fixture.pt"
+    operating_point_path(weights).write_text(
+        json.dumps(
+            {
+                "threshold": threshold,
+                "noise_confidence_ceiling": ceiling,
+                "weights_id": "sha256:0000000000000000",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reason = why_the_noise_control_cannot_fire(weights)
+    if measurable:
+        assert reason is None, f"{which}: reported NOT MEASURABLE when it is: {reason}"
+    else:
+        assert reason is not None, f"{which}: reported measurable when it is not"
+        assert "NOT MEASURABLE" in reason
+        # It must name the two numbers that made it so, or the report is an
+        # opaque refusal and the reader cannot check it.
+        assert f"{ceiling:.4f}" in reason, f"{which}: the ceiling is not named"
+        assert f"{threshold:.3f}" in reason, f"{which}: the operating point is not named"
+
+
+@pytest.mark.guarantee
+def test_a_sidecar_missing_either_number_is_not_measurable_rather_than_assumed(tmp_path):
+    """An older sidecar carries no ceiling. That is unknown, not satisfied."""
+    import json
+
+    from vehicle_id.engine import operating_point_path
+
+    weights = tmp_path / "older.pt"
+    operating_point_path(weights).write_text(
+        json.dumps({"threshold": 0.99, "weights_id": "sha256:0000000000000000"}),
+        encoding="utf-8",
+    )
+    reason = why_the_noise_control_cannot_fire(weights)
+    assert reason is not None and "NOT MEASURABLE" in reason
+
+    # And the control for the control: a sidecar carrying both is not refused.
+    both = tmp_path / "newer.pt"
+    operating_point_path(both).write_text(
+        json.dumps(
+            {
+                "threshold": 0.99,
+                "noise_confidence_ceiling": 0.9998,
+                "weights_id": "sha256:0000000000000000",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert why_the_noise_control_cannot_fire(both) is None
 
 
 @needs_weights

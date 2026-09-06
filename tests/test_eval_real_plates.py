@@ -38,15 +38,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 pytest.importorskip("torch")
 pytest.importorskip("cv2")
 
-import cv2  # noqa: E402
 import numpy as np  # noqa: E402
-
 from eval_real_plates import (  # noqa: E402
     AS_IS,
     LETTERBOX,
-    RegistrationInOutput,
-    PathInsideRepository,
     TILTS,
+    PathInsideRepository,
+    RegistrationInOutput,
     as_capture,
     build_output,
     classify,
@@ -58,6 +56,7 @@ from eval_real_plates import (  # noqa: E402
     training_aspect,
     write_output,
 )
+
 from vehicle_id.engine import PlateEngine  # noqa: E402
 from vehicle_id.plates.generator import PLATE_H, PLATE_W  # noqa: E402
 
@@ -136,6 +135,103 @@ def test_an_exact_read_below_the_threshold_is_not_counted_as_wrong():
     assert classify(read, "ABC 1234") == "exact_fallback"
 
 
+# --- the roll-up, which is what actually gets published -------------------
+#
+# The five cases above pin `classify()`. They say nothing about the three
+# numbers `build_output` DERIVES from it -- `exact`, `wrong`, `no_text` -- and
+# those are what a receipt quotes. Every fixture in this file used to hand
+# `build_output` an `empty_buckets()`, so the derivation was never exercised
+# with a non-zero count and a bug in it could not be seen. Planted at review:
+#
+#     "exact": buckets["exact_answer"] + buckets["wrong_fallback"]
+#
+# left 25/25 green, and would have published "exact: 17" for a round whose
+# measured answer was 0.
+
+#: Distinct, non-zero, and powers of two, so EVERY subset of them sums to a
+#: different number. That is what makes the roll-up assertions able to fail:
+#: with `empty_buckets()` all five cells are zero, every roll-up is 0 whatever
+#: arithmetic `build_output` performs, and a bug summing the wrong pair stays
+#: invisible. With these, any wrong pairing produces a different total, always.
+DISTINCT_BUCKETS = {
+    "exact_answer": 1,
+    "exact_fallback": 2,
+    "wrong_answer": 4,
+    "wrong_fallback": 8,
+    "no_text": 16,
+}
+#: The counts and `n` are not independent: every labelled photograph lands in
+#: exactly one cell.
+DISTINCT_N = sum(DISTINCT_BUCKETS.values())
+
+
+def build_output_with(buckets: dict) -> dict:
+    """The real builder, the real object shape, these counts."""
+    return representative_fixture(buckets=buckets)
+
+
+@guarantee
+def test_the_published_totals_are_the_sum_of_the_right_cells():
+    """The arithmetic, with counts that can tell one pairing from another.
+
+    The fail-control is the planted bug itself, and it is a real one rather than
+    a hypothetical: swap either addend of any roll-up for a cell from another
+    row and this goes red, because the bucket counts are powers of two and no
+    two subsets of them share a sum. Proven by planting it and running.
+    """
+    out = build_output_with(DISTINCT_BUCKETS)
+
+    assert out["exact"] == 1 + 2, "exact = exact_answer + exact_fallback"
+    assert out["wrong"] == 4 + 8, "wrong = wrong_answer + wrong_fallback"
+    assert out["no_text"] == 16, "no_text is the cell itself"
+
+    # Nothing may be counted twice and nothing may be dropped: the three
+    # published numbers partition the five cells exactly.
+    assert out["exact"] + out["wrong"] + out["no_text"] == DISTINCT_N == out["n"]
+
+
+@guarantee
+@pytest.mark.parametrize(
+    "cell",
+    ["exact_answer", "exact_fallback", "wrong_answer", "wrong_fallback", "no_text"],
+)
+def test_every_cell_moves_exactly_one_published_total(cell):
+    """One cell at a time, so a roll-up reading a cell it should not is caught.
+
+    Derived rather than listed: which total a cell belongs to is read from the
+    cell's own name, so a sixth bucket added in a later round is covered here
+    without anyone remembering. Add one cell, and exactly one published number
+    moves, by exactly one.
+    """
+    expected = "no_text" if cell == "no_text" else cell.split("_")[0]
+
+    base = build_output_with(DISTINCT_BUCKETS)
+    bumped = dict(DISTINCT_BUCKETS)
+    bumped[cell] += 1
+    after = build_output_with(bumped)
+
+    for total in ("exact", "wrong", "no_text"):
+        moved = after[total] - base[total]
+        if total == expected:
+            assert moved == 1, f"{cell} did not move {total}"
+        else:
+            assert moved == 0, f"{cell} moved {total}, which it does not belong to"
+
+
+@guarantee
+def test_the_counts_block_is_the_buckets_and_not_a_shared_reference():
+    """`counts` is what a reader reconciles the totals against.
+
+    If it aliased the caller's dict, a later mutation would change the object
+    that was already written and the two would still agree with each other.
+    """
+    buckets = dict(DISTINCT_BUCKETS)
+    out = build_output_with(buckets)
+    assert out["counts"] == DISTINCT_BUCKETS
+    buckets["exact_answer"] = 999
+    assert out["counts"]["exact_answer"] == 1, "the object aliased the caller's dict"
+
+
 # --- the padding ---------------------------------------------------------
 
 
@@ -174,20 +270,23 @@ def test_the_training_aspect_is_read_from_the_generator_not_typed():
 # --- the refusal, catching -----------------------------------------------
 
 
-def representative_fixture(condition: str = AS_IS) -> dict:
-    """The real object, built by the harness's own builder, with zero counts.
+def representative_fixture(condition: str = AS_IS, buckets: dict | None = None) -> dict:
+    """The real object, built by the harness's own builder, with REAL counts.
 
     Not a hand-built dict: the shape comes from the function the real run calls,
     so it cannot drift. The VALUES are supplied here and are deliberately
     representative -- a 16-hex `weights_id` is the form that would exercise the
-    length branch, where a placeholder would prove nothing.
+    length branch, where a placeholder would prove nothing, and non-zero
+    asymmetric bucket counts are the form that exercises the roll-up, where
+    zeros proved nothing.
     """
+    buckets = dict(DISTINCT_BUCKETS if buckets is None else buckets)
     return build_output(
-        buckets=empty_buckets(),
+        buckets=buckets,
         per_tilt={t: {"n": 0, "exact": 0, "wrong": 0, "no_text": 0} for t in TILTS},
         mean_conf_exact=None,
         mean_conf_wrong=None,
-        n=0,
+        n=sum(buckets.values()),
         excluded=0,
         weights_id="sha256:0de21983b58b0ecd",
         threshold=0.99,
@@ -227,7 +326,10 @@ def test_the_writer_refuses_a_registration_used_as_a_key(tmp_path):
 
 
 @guarantee
-@pytest.mark.parametrize("plate", ["ABC1234", "ABC 1234", "ABC-1234", "abc1234", "AB1234", "ABC12345"])
+@pytest.mark.parametrize(
+    "plate",
+    ["ABC1234", "ABC 1234", "ABC-1234", "abc1234", "AB1234", "ABC12345"],
+)
 def test_the_predicate_catches_the_shapes_a_registration_is_written_in(plate):
     assert registration_shaped(plate), f"{plate!r} should be caught"
 

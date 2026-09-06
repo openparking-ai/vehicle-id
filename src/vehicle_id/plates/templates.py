@@ -92,27 +92,6 @@ TEMPLATES: tuple[PlateTemplate, ...] = (
         ink=(30, 45, 90),
         weight=1.0,
     ),
-    # A layout with a plain band down the left edge and a restricted letter
-    # set. It carries no top or bottom text: there is nothing it needs to say.
-    #
-    # The band is 6 px, and that number is DERIVED rather than chosen. The
-    # widest registration this pattern can draw is "MMM 0000" -- M is the widest
-    # letter these fonts have -- which renders 298 px at the top of the scale
-    # range. Centring keeps 8 px each side, so the band can be at most
-    # PLATE_W - 298 - 16 = 6 px. It is thin, and thin is the honest answer: the
-    # alternative is narrowing the scale range for this template alone, and the
-    # scale variation is what stands in for the font variation the generator
-    # cannot model -- narrowing it on the one layout being measured against real
-    # photographs would bias that measurement.
-    PlateTemplate(
-        state="BAND3L4N",
-        patterns=("LLL NNNN",),
-        letters="ABEZHIKMNOPTYX",
-        background=(250, 250, 250),
-        ink=(35, 35, 40),
-        weight=1.0,
-        band=6,
-    ),
 )
 
 

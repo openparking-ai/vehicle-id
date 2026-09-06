@@ -41,7 +41,7 @@ import hashlib
 import json
 import statistics
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import cv2
@@ -407,7 +407,7 @@ def main() -> int:
         package_version=engine.engine.version,
         script_digest=script_sha256(),
         window=window,
-        timestamp=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        timestamp=datetime.now(UTC).astimezone().isoformat(timespec="seconds"),
     )
     write_output(obj, args.out, window)
     print(f"\n  n={n} excluded={excluded}  "
