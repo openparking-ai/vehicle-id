@@ -594,17 +594,61 @@ def test_no_descriptor_is_carried_when_nothing_was_there():
     assert read.identity.plate is None
 
 
+class _Throws:
+    """One way an injected computer fails: it raises."""
+
+    def compute(self, image):
+        raise RuntimeError("no")
+
+
+class _ReturnsBytes:
+    """The other way, and it is the one that got through.
+
+    `.compute(image) -> str` is a PUBLISHED shape, not an enforced one, so a
+    third party's computer can return anything. A non-string used to travel
+    past `_describe` -- which caught only exceptions -- into `Identity(...)`,
+    where the contract's type check raised `ValueError` out of `read()`, a
+    method whose own docstring promises no path through it raises. The engine
+    was only ever this honest about the failures it had imagined.
+    """
+
+    def compute(self, image):
+        return b"opvid-fp/1:bytes-not-str"
+
+
+class _ReturnsNone:
+    """A computer that answers "I could not", off the published shape."""
+
+    def compute(self, image):
+        return None
+
+
 @guarantee
 @needs_engine
-def test_a_descriptor_that_cannot_be_computed_is_null_and_not_an_exception():
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        pytest.param(_Throws(), id="throws"),
+        pytest.param(_ReturnsBytes(), id="returns-bytes"),
+        pytest.param(_ReturnsNone(), id="returns-none"),
+        # Not a computer at all: an operator who read `descriptor=` as naming a
+        # kind. It has no `.compute`, so it arrives by the same first branch,
+        # and the point is that it produces a record rather than an exception.
+        pytest.param("orb", id="not-a-computer-at-all"),
+    ],
+)
+def test_a_descriptor_that_cannot_be_computed_is_null_and_not_an_exception(descriptor):
     """A component, not the answer. The engine's promise is that there is no
-    path through `read` that raises instead of answering, and a descriptor
-    computer that throws must not become the first one."""
-    class _Broken:
-        def compute(self, image):
-            raise RuntimeError("no")
+    path through `read` that raises instead of answering, and no descriptor
+    computer must become the first one.
 
-    read = _an_engine(descriptor=_Broken()).read([_a_capture(a_vehicle(51))])
+    Parametrised over BOTH axes that reach the guard, because it previously
+    varied only one of them: the fixture built a computer that THREW, the
+    docstring stated the general claim, and the type failure -- the one that
+    actually broke the promise -- was never constructed. A fixture is part of
+    the measurement, and it has to vary every axis the decision branches on.
+    """
+    read = _an_engine(descriptor=descriptor).read([_a_capture(a_vehicle(51))])
     assert read.identity.descriptor is None
     assert read.identity.plate == "ABC1234"
     assert read.is_answer
