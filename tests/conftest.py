@@ -49,6 +49,10 @@ GUARANTEE_MODULES = (
     # file is proven here and nowhere else -- and this module opens with
     # `importorskip`, which is exactly the shape that vanished silently before.
     "test_eval_real_plates.py",
+    # The operating-point chooser. It picks the number the engine applies to
+    # every read, and the constraint that stops it choosing one that breaks a
+    # published guarantee is proven here and nowhere else.
+    "test_operating_point.py",
 )
 
 _skipped: list[tuple[str, str]] = []
