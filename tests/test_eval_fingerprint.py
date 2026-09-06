@@ -608,6 +608,9 @@ def test_the_harness_runs_end_to_end_and_writes_an_evidence_file(tmp_path):
         "--photos", str(photos),
         "--index", str(photos / "index.json"),
         "--out", str(out),
+        # Stated, because the harness supplies no constraint defaults. THIS
+        # run's constraints, on synthetic pairs; not a product decision.
+        "--max-false-match-rate", "0.05", "--max-miss-rate", "0.40",
     ]) == 0
 
     obj = json.loads(out.read_text())
@@ -635,6 +638,7 @@ def test_a_run_of_real_photographs_would_not_be_marked_synthetic(tmp_path):
     out = tmp_path / "evidence.json"
     assert harness.main([
         "--photos", str(photos), "--index", str(index_path), "--out", str(out),
+        "--max-false-match-rate", "0.05", "--max-miss-rate", "0.40",
     ]) == 0
     obj = json.loads(out.read_text())
     assert obj["synthetic"] is False
@@ -650,6 +654,10 @@ def test_one_pair_is_refused_because_it_has_no_different_car_comparison(tmp_path
             "--photos", str(photos),
             "--index", str(photos / "index.json"),
             "--out", str(tmp_path / "o.json"),
+            # Supplied so the refusal under test is the PAIR-COUNT one. Without
+            # them the run refuses earlier, for a missing flag, and the match
+            # below would be asserting a different refusal than it names.
+            "--max-false-match-rate", "0.05", "--max-miss-rate", "0.40",
         ])
 
 
@@ -709,3 +717,63 @@ def test_a_rate_over_an_empty_report_half_is_null_and_not_zero(pair_set):
     false_match = block["bounds_95"]["false_match_rate"]
     assert false_match["over"] > 0
     assert false_match["observed"] is not None
+
+
+@guarantee
+def test_a_measuring_run_with_no_constraints_refuses_and_names_them(tmp_path, capsys):
+    """FAIL-CONTROL: restore either default and this goes green when it must not.
+
+    The entry point used to default `--max-false-match-rate` to 0.01 and
+    `--max-miss-rate` to 0.20, so a run that overrode nothing published counts
+    under constraints that read as operating policy and that nobody chose --
+    the decision `choose_operating_point` refuses to make in a helper, made one
+    layer up instead. Refusing is the shipped behaviour one function down.
+    """
+    photos = tmp_path / "pairs"
+    write_synthetic(photos, pairs=3, flat=0)
+    with pytest.raises(SystemExit) as refusal:
+        harness.main([
+            "--photos", str(photos),
+            "--index", str(photos / "index.json"),
+            "--out", str(tmp_path / "o.json"),
+        ])
+    assert refusal.value.code == 2
+
+    # BOTH names, and on the refusal LINE rather than anywhere in the stream.
+    # Two earlier versions of this control could not fail for the thing it
+    # guards, and a run said so both times. Asserting only the exit code proved
+    # that AT LEAST ONE constraint was required: restoring a single default left
+    # the other missing, the run still refused, and the control stayed green
+    # with the defect back. Asserting the flag names against the whole of stderr
+    # was no better -- argparse prints its usage banner first and that banner
+    # names every flag the parser has, so the match found the banner rather than
+    # the refusal and stayed green just the same.
+    refused = capsys.readouterr().err
+    line = next(
+        (text for text in refused.splitlines() if "are required unless" in text), ""
+    )
+    assert "--max-false-match-rate" in line, refused
+    assert "--max-miss-rate" in line, refused
+
+    # And the control: the SAME run with the constraints stated proceeds, so
+    # the refusal above is the missing flags and not something else broken.
+    assert harness.main([
+        "--photos", str(photos),
+        "--index", str(photos / "index.json"),
+        "--out", str(tmp_path / "ok.json"),
+        "--max-false-match-rate", "0.05", "--max-miss-rate", "0.40",
+    ]) == 0
+
+
+@guarantee
+def test_writing_a_synthetic_set_needs_no_constraints(tmp_path):
+    """The refusal is on the MEASURING path only.
+
+    `--write-synthetic` chooses no operating point and counts nothing, so
+    argparse `required=True` would have refused a run that needs neither. This
+    is why the constraints are refused in `main` beside the missing paths
+    rather than at parse time.
+    """
+    assert harness.main([
+        "--write-synthetic", str(tmp_path / "pairs"), "--pairs", "3", "--flat", "1",
+    ]) == 0
