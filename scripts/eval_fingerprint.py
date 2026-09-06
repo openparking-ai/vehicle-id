@@ -622,12 +622,18 @@ def arm(
     }
     out["bounds_95"] = {
         "miss_rate": {
-            "observed": miss_rate,
+            # NOT MEASURED, not zero. `rates_at` answers 0.0 for an empty class
+            # because a rate over nothing has no other arithmetic to give, and
+            # that 0.0 used to be published here beside `over: 0` -- the best
+            # possible value, manufactured, in the field a reader quotes. Same
+            # shape as `distribution` above and as `TermDistance`: the number is
+            # null exactly when there was nothing to compute it over.
+            "observed": miss_rate if report[SAME_CAR] else None,
             "upper": clopper_pearson_upper(misses, len(report[SAME_CAR])),
             "over": len(report[SAME_CAR]),
         },
         "false_match_rate": {
-            "observed": false_match_rate,
+            "observed": false_match_rate if report[DIFFERENT_CAR] else None,
             "upper": clopper_pearson_upper(false_matches, len(report[DIFFERENT_CAR])),
             "over": len(report[DIFFERENT_CAR]),
         },
@@ -635,7 +641,10 @@ def arm(
             "Clopper-Pearson, one-sided, 95%. Zero events does not mean a rate "
             "of zero: it means the rate is no worse than the bound, and with "
             "this many comparisons the bound is what the decision has to be "
-            "made on."
+            "made on. An `observed` of null means the report half held nothing "
+            "to measure -- `over` is 0 and no rate was computed. It is NOT a "
+            "measured rate of zero, and neither is the bound beside it, which "
+            "is null for the same reason."
         ),
     }
     out["straddling_comparisons_used_in_neither_half"] = straddling

@@ -651,3 +651,61 @@ def test_one_pair_is_refused_because_it_has_no_different_car_comparison(tmp_path
             "--index", str(photos / "index.json"),
             "--out", str(tmp_path / "o.json"),
         ])
+
+
+# --- a rate with no observations is NOT MEASURED --------------------------
+
+
+def _unmeasurable_term(comparison, term):
+    """The same shape as `_replace_term`, on the other side of the third outcome."""
+    from vehicle_id.fingerprint import Comparison
+
+    terms = tuple(
+        TermDistance(term=t.term, value=None, measurable=False, reason="forced by the control")
+        if t.term == term
+        else t
+        for t in comparison.terms
+    )
+    return Comparison(kind=comparison.kind, version=comparison.version, terms=terms)
+
+
+@guarantee
+def test_a_rate_over_an_empty_report_half_is_null_and_not_zero(pair_set):
+    """FAIL-CONTROL: the manufactured zero.
+
+    `rates_at` answers 0.0 for an empty class -- there is no other arithmetic a
+    rate over nothing can have -- and that 0.0 used to reach `bounds_95.observed`
+    beside `over: 0` and `upper: null`. Zero is the BEST possible miss rate, so
+    the manufactured number flattered, in the one field a reader quotes alone.
+
+    Forced by making every same-car comparison in the REPORT half unmeasurable,
+    which is the real way this arrives: a report half whose pairs are all too
+    flat to match. Restore `"observed": miss_rate` and this goes red.
+    """
+    split = pair_set["split"]
+    emptied = {
+        (left, right): (
+            _unmeasurable_term(comparison, "structure")
+            if left[0] == right[0] and split[left[0]] == REPORT
+            else comparison
+        )
+        for (left, right), comparison in pair_set["measured"].items()
+    }
+    block = arm(
+        "structure", emptied, pair_set["comparisons"], split,
+        pair_set["descriptors"], pair_set["pair_ids"],
+        max_false_match_rate=0.05, max_miss_rate=0.40,
+    )
+    miss = block["bounds_95"]["miss_rate"]
+    assert miss["over"] == 0, "the report half was not emptied, so this proves nothing"
+    assert miss["observed"] is None, (
+        "a rate computed over nothing was published as 0.0 -- the best possible "
+        "value, measured on no comparisons at all"
+    )
+    assert miss["upper"] is None
+
+    # The control for the control: the OTHER class still has observations, so
+    # the null above is the empty half and not the whole block going null.
+    false_match = block["bounds_95"]["false_match_rate"]
+    assert false_match["over"] > 0
+    assert false_match["observed"] is not None
