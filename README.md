@@ -192,11 +192,30 @@ ladder:
 
 **The recogniser is accurate AND overconfident**, which matters more than the
 accuracy: mean confidence barely moves across the ladder while accuracy falls.
-So the operating point is measured, not chosen — **0.99**, the cheapest
-threshold whose silent-wrong rate falls below 1% (0.87% wrong-but-answered,
-30.9% sent to fallback). At a naive 0.85 the same model answers wrongly 4.45% of
-the time. That is the whole argument for shipping the threshold inside the
-record.
+So the operating point is measured, not chosen — **<!--m:plates.operating_point-->0.99<!--/m-->**,
+the cheapest threshold that satisfies all three measured constraints at once:
+silent-wrong below <!--m:plates.max_silent_wrong-->1%<!--/m-->, at or below the
+clean-plate confidence <!--m:plates.clean_confidence-->0.9982<!--/m--> so a
+pristine plate is still answered, and at or below the noise confidence ceiling
+<!--m:plates.noise_ceiling-->0.9998<!--/m--> so the presence gate's accuracy
+stays measurable. At that point <!--m:plates.silent_wrong-->0.80%<!--/m--> are
+wrong-but-answered and <!--m:plates.fallback-->30.6%<!--/m--> are sent to
+fallback. At a naive <!--m:plates.naive_threshold-->0.85<!--/m--> the same model
+answers wrongly <!--m:plates.naive_silent_wrong-->4.45%<!--/m--> of the time.
+That is the whole argument for shipping the threshold inside the record.
+
+**When no threshold satisfies all three, the harness refuses and names the
+numbers that conflict** rather than writing one that breaks a published
+guarantee. Nothing is then written beside the weights, and the engine will not
+start on them. A model with no admissible operating point is not one to run a
+barrier on.
+
+Every figure in this paragraph is produced by `python scripts/eval_plates.py
+--update-docs` from `docs/measured/plates.json`, on checkpoint
+<!--m:plates.weights-->sha256:0de21983b58b0ecd<!--/m-->, and a test fails when
+the document and the measurement disagree. The ladder table above is not: it is
+hand-written, records no checkpoint, and is the half of this section that can
+still drift.
 
 ## The presence gate
 

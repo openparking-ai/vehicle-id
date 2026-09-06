@@ -20,15 +20,32 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import sys
 import time
 from pathlib import Path
 
 import torch
 
+from vehicle_id.engine import weights_id
 from vehicle_id.plates.dataset import EVAL_SEED
 from vehicle_id.plates.generator import PlateGenerator
 
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+
 LADDER = list(range(0, 10))
+
+#: What this harness writes so the documents can cite it. `docs/measured/` is
+#: the only place a published plate figure may come from; `models/` is
+#: gitignored, so the operating-point sidecar cannot serve -- no file in the
+#: repository recorded which checkpoint produced the published plate figures,
+#: and this is that file.
+PLATES_EVIDENCE = Path("docs/measured/plates.json")
+
+#: The threshold the README contrasts the measured operating point against.
+#: Named here so the document's "at a naive 0.85" and the measured 0.85 row are
+#: one number rather than two that agree today.
+NAIVE_THRESHOLD = 0.85
 
 
 def normalise(text: str) -> str:
@@ -286,6 +303,14 @@ def main() -> int:
         help="record the measured operating point beside the weights, so the "
              "engine can apply a number that was measured for THESE weights",
     )
+    ap.add_argument(
+        "--update-docs",
+        action="store_true",
+        help="write docs/measured/plates.json and rewrite the figures the "
+             "documents cite from it. A published figure is PRODUCED by a "
+             "command, not typed: README:196-197 published 0.87%% / 30.9%% "
+             "against a measurement of 0.80%% / 30.6%% and nothing could see it.",
+    )
     args = ap.parse_args()
 
     print("=" * 78)
@@ -337,6 +362,7 @@ def main() -> int:
     print("   A raw score is not a threshold. Our recogniser is ACCURATE and")
     print("   OVERCONFIDENT: mean confidence barely moves across the ladder while")
     print("   accuracy falls. So the operating point has to be measured, not chosen.")
+    plate_evidence = None
     for name, reader in readers.items():
         print(f"\n   {name}")
         print(f"     {'threshold':>9}  {'answers':>8}  {'of those wrong':>15}  {'-> fallback':>11}")
@@ -382,6 +408,23 @@ def main() -> int:
                   f"silent-wrong {point['silent_wrong_pct']:.2f}%, "
                   f"fallback {point['fallback_pct']:.1f}%")
 
+        if name.startswith("ours"):
+            plate_evidence = {
+                "weights_id": weights_id(args.weights),
+                "per_rung": args.per_rung,
+                "rungs": len(LADDER),
+                "eval_seed": EVAL_SEED,
+                "max_silent_wrong_pct": MAX_SILENT_WRONG_PCT,
+                "clean_plate_confidence": clean,
+                "noise_confidence_ceiling": ceiling,
+                "candidates": [
+                    {"threshold": t, "silent_wrong_pct": s, "fallback_pct": f}
+                    for t, s, f in rows
+                ],
+                "operating_point": point,
+                "naive_threshold": NAIVE_THRESHOLD,
+            }
+
         if args.write_operating_point and name.startswith("ours"):
             if point is None:
                 # Refusing to write one is the honest outcome: these weights have
@@ -425,6 +468,31 @@ def main() -> int:
     if args.json_out:
         args.json_out.write_text(json.dumps(results, indent=2))
         print(f"\n wrote {args.json_out}")
+
+    if args.update_docs:
+        # `plate_evidence` is bound by the "ours" arm above, which is always in
+        # `readers`. Asserted rather than assumed, because a silent `None` here
+        # would write an empty evidence file over a good one.
+        assert plate_evidence is not None, "no measurement for our own recogniser"
+        PLATES_EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
+        PLATES_EVIDENCE.write_text(
+            json.dumps(plate_evidence, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"\n wrote {PLATES_EVIDENCE}")
+
+        from measured_figures import DOCUMENTS, blocks, figures, load_evidence, rewrite
+
+        evidence = load_evidence(ROOT)
+        values, rendered = figures(evidence), blocks(evidence)
+        for document in DOCUMENTS:
+            path = ROOT / document
+            before = path.read_text(encoding="utf-8")
+            after = rewrite(before, values, rendered)
+            if after != before:
+                path.write_text(after, encoding="utf-8")
+                print(f" updated the cited figures in {document}")
+            else:
+                print(f" {document} already matches the measurement")
     print()
     return 0
 
