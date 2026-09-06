@@ -147,9 +147,15 @@ jobs:
         run: |
           python scripts/eval_fingerprint.py --write-synthetic /tmp/fp-pairs \
             --pairs 6 --flat 2
+          # The constraints are stated because the harness no longer supplies
+          # them. A run that overrode nothing used to publish counts under
+          # 0.01 / 0.20 -- numbers that read as operating policy and that
+          # nobody chose. These two are THIS RUN's, on synthetic pairs, and
+          # they are not a product decision.
           python scripts/eval_fingerprint.py \
             --photos /tmp/fp-pairs --index /tmp/fp-pairs/index.json \
-            --out /tmp/fp-evidence.json | tee /tmp/fp.txt
+            --out /tmp/fp-evidence.json \
+            --max-false-match-rate 0.01 --max-miss-rate 0.20 | tee /tmp/fp.txt
           grep -q "SYNTHETIC" /tmp/fp.txt || {
             echo "a synthetic run did not say so"; exit 1; }
           python - <<'PY'
@@ -173,12 +179,42 @@ jobs:
         # `check-no-real-data.js` scans TRACKED files and can never see a
         # photograph outside the tree, so this is the half that protects the
         # photographs themselves.
+        #
+        # This step used to assert a NON-ZERO EXIT and nothing else. That was
+        # enough only while a missing flag could not produce one. It can now:
+        # the constraints have no defaults, so an invocation that omits them
+        # exits 2, and a check reading only the exit code would have gone green
+        # while measuring nothing. It asserts the REFUSAL'S TEXT instead, and
+        # the fail-control below is the other refusal, required to be rejected.
         run: |
-          if python scripts/eval_fingerprint.py --photos . --index /tmp/fp-pairs/index.json \
-               --out /tmp/x.json; then
+          set -o pipefail
+          if python scripts/eval_fingerprint.py --photos . \
+               --index /tmp/fp-pairs/index.json --out /tmp/x.json \
+               --max-false-match-rate 0.01 --max-miss-rate 0.20 2>&1 \
+               | tee /tmp/refusal.txt; then
             echo "the harness read photographs from inside the repository"; exit 1
           fi
-          echo "refused, as required"
+          grep -q "never enter a repository" /tmp/refusal.txt || {
+            echo "it exited non-zero, but not because of the repository:"
+            cat /tmp/refusal.txt; exit 1; }
+          echo "refused for the right reason, as required"
+
+          # FAIL-CONTROL for the line above. The SAME command with the
+          # constraints missing also exits non-zero -- for an unrelated reason.
+          # If this check cannot tell the two apart it is not evidence, so the
+          # impostor is required to be rejected here.
+          python scripts/eval_fingerprint.py --photos . \
+            --index /tmp/fp-pairs/index.json --out /tmp/x.json \
+            > /tmp/impostor.txt 2>&1 && {
+            echo "the impostor run was supposed to fail"; exit 1; }
+          if grep -q "never enter a repository" /tmp/impostor.txt; then
+            echo "the impostor refusal was accepted as a repository refusal"
+            exit 1
+          fi
+          grep -q "are required unless --write-synthetic" /tmp/impostor.txt || {
+            echo "the impostor did not refuse for the reason this control needs"
+            cat /tmp/impostor.txt; exit 1; }
+          echo "fail-control held: a missing-flag refusal is not a repository refusal"
 
       - name: Engine tests, including never-wrong-silently
         # The accuracy half, which genuinely needs weights better than the small

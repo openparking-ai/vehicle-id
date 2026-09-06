@@ -121,9 +121,19 @@ class PlateEngine:
     def read(self, captures: Sequence[Capture]) -> Read:
         """Identify from one or more captures of the SAME vehicle.
 
-        Always returns a record. There is no path through this method that
-        raises instead of answering, because a consumer at a barrier needs an
-        outcome, and "the engine threw" is not one a lane can act on.
+        Answers rather than raising. No ORDINARY failure inside this method
+        reaches the caller as an exception -- a component that throws, a third
+        party's computer that returns the wrong type, a capture that will not
+        decode -- because a consumer at a barrier needs an outcome, and "the
+        engine threw" is not one a lane can act on.
+
+        It does not catch `BaseException`, and the promise above is deliberately
+        not stated over one. `SystemExit`, `KeyboardInterrupt` and
+        `GeneratorExit` are the interpreter or the operator asking this process
+        to stop; they are not failures of a read, and a lane that swallowed them
+        would resist being shut down or interrupted. They propagate. The older
+        wording here claimed no path through this method raises at all, which
+        was broader than the code and broader than any Python code should be.
         """
         if not captures:
             return self._record([], "", 0.0, None, disagreed=False, presence=_no_presence())
@@ -239,10 +249,12 @@ class PlateEngine:
     def _describe(self, image) -> str | None:
         """The appearance descriptor for one image, or NOT MEASURED.
 
-        Never raises into the read path. A descriptor is one component of an
-        identity and the engine's promise is that it always returns a record; a
-        component that could not be computed is null, exactly like every other
-        component nothing measured.
+        No ordinary failure here raises into the read path. A descriptor is one
+        component of an identity and the engine's promise is that it answers
+        rather than raising; a component that could not be computed is null,
+        exactly like every other component nothing measured. An injected
+        computer that raises a `BaseException` is not caught here -- see
+        `read()` for why that is deliberate rather than an oversight.
 
         There are TWO ways an injected computer fails, and both end here. That
         is not tidiness: `descriptor=` is a PUBLISHED injection point -- the
@@ -251,7 +263,7 @@ class PlateEngine:
         enforced one. A computer that throws was caught from the first line of
         this method. A computer that returns the wrong TYPE was not: the value
         went on to `Identity(...)`, whose type check raised `ValueError` out of
-        a method whose own docstring promises no path through it raises. At a
+        a method whose own docstring promises it answers rather than raising. At a
         barrier a raise is not an answer a lane can act on; an absent component
         is, and it is the answer every other unmeasured component already gives.
 
