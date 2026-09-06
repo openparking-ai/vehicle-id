@@ -19,9 +19,11 @@ Five rules this file exists to enforce.
   * **No real data reaches a repository.** The photographs and the index live
     outside every git work tree and this refuses to run if any path it is handed
     resolves inside one. What it writes is counts, and the writer REFUSES to
-    write any string that came from the input -- a pair id, a file name, a path
-    component -- so a photograph cannot be identified from the evidence file
-    however the operator chose to name it.
+    write any string the OPERATOR used to label a photograph -- a pair id, a file
+    name -- so a photograph cannot be identified from the evidence file however
+    it was named. Path-shaped strings are refused separately, by shape, because
+    nothing this harness publishes is a location. Directory names are NOT
+    treated as labels; see `input_tokens` for why that was tried and reverted.
 
   * **THREE outcomes per arm, never two.** A frame with too little texture
     yields no keypoints and there is nothing to match. "Nothing matched" and
