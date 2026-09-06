@@ -27,7 +27,8 @@ by push, or by pull.
     "make": null,
     "model": null,
     "color": null,
-    "marks": []
+    "marks": [],
+    "descriptor": null
   },
   "confidence": 0.9962,
   "engine": {
@@ -51,6 +52,7 @@ by push, or by pull.
 | `camera_id` | Whatever the caller labelled the capture with. The engine does not interpret it. |
 | `identity` | What was measured. **Anything not measured is `null`.** |
 | `identity.marks` | Distinguishing appearance. Empty means "none were measured", never "the vehicle had none". |
+| `identity.descriptor` | The **appearance descriptor**: an opaque, versioned, compact string computed from one capture. Not an image, not human-readable, and not parsed by this contract. `null` means NOT MEASURED — it is off unless the deployment asks for it. See below. |
 | `confidence` | `[0, 1]`, the engine's own measure for this read. |
 | `engine.weights_id` | A digest of the weights actually loaded, not a label somebody typed. Two records that disagree are only worth investigating if you can tell whether the same model produced them. |
 | `threshold_applied` | The operating point in force when this record was produced. **Measured for the exact weights named in `weights_id`** — the engine refuses to start on weights whose operating point nobody has measured, rather than stamping a constant onto records a different model produced. |
@@ -176,12 +178,58 @@ An error means the engine could not process your request at all:
 A read that produced no plate is **not** in this list. That is a `200` with
 `outcome: "fallback"`.
 
+## An identity is a set of components
+
+A plate is **one component** of a vehicle's identity, not the identity. Licence
+plate recording is mandatory in no garage we know of, it is an expensive thing to
+run, and a site may identify vehicles by plate alone, by appearance alone, by a
+QR code alone, or by any combination. So `identity` is a set of nullable
+components and a consumer reads whichever ones are non-null.
+
+A record carrying a `descriptor` and no `plate` is a complete, valid record.
+
+### The appearance descriptor
+
+`identity.descriptor` is an opaque string. Three things are true of it and
+nothing else is promised:
+
+- **It is versioned, and the version is in the string.** It begins
+  `opvid-fp/<version>:`. Two descriptors of different versions **do not
+  compare** — an implementation must refuse, not compare the parts it still
+  understands. A change to how the bytes are computed moves the DESCRIPTOR's
+  version; it does not move `schema_version`, because the record's shape has
+  not changed.
+- **It is not an image.** It carries a bounded set of keypoint descriptors, a
+  colour histogram and a coarse edge grid, all computed after a fixed resize —
+  so its size does not grow with the camera's resolution and a photograph
+  cannot be reconstructed from it. `redacted()` drops it with the rest of the
+  identity, and nothing in this package logs one.
+- **It is null unless the deployment asked for it.** Many integrations hand this
+  engine a tight plate crop; an appearance descriptor computed from a plate crop
+  describes a plate, not a vehicle. Whether it is worth computing is a property
+  of what the camera is pointed at, which only the operator knows.
+
+**There is no published matching threshold, and that is a statement rather than
+an omission.** `vehicle_id.fingerprint.compare` returns a DISTANCE per term and
+never a verdict, and its operating-point chooser takes its constraints
+explicitly and refuses, naming the conflict, when no threshold satisfies them —
+the same rule the plate operating point follows. Whether an appearance match is
+good enough to act on is a measurement nobody has taken on real photographs yet.
+Until it exists, do not build a decision on this field.
+
 ## Compatibility
 
 `schema_version` is `1`.
 
 - **Additive changes do not bump it.** New fields may appear. Ignore fields you
   do not recognise rather than rejecting the record.
+- **`identity.descriptor` was added under exactly that rule, and the version did
+  NOT move.** A consumer pinned to a commit from before it existed sees no
+  descriptor and behaves precisely as it did before. Bumping the version for an
+  added field is not a cautious choice — this implementation version-matches on
+  `!=`, so every pinned consumer would refuse every record, every vehicle at
+  every lane would fall to a human on every arrival, and that has already
+  happened once.
 - **Anything a consumer could notice bumps it** — a field removed, renamed, or
   changed in meaning or type.
 - **An unrecognised version is refused, not partially read.** This
