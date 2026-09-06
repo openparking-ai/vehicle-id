@@ -119,14 +119,63 @@ jobs:
           VEHICLE_ID_ALLOW_SKIPPED: "needs weights"
         run: pytest tests/test_plates.py -q
 
-      - name: The harness runs, reports, and records the operating point
-        # --write-operating-point is what lets the engine start below. The
-        # engine refuses to run on weights whose operating point nobody has
-        # measured, rather than stamping a constant onto records produced by a
-        # model it was not measured for.
+      - name: The harness runs, and REFUSES an operating point to a model that cannot read
+        # The chooser's constraints, exercised end to end rather than only in
+        # tests/test_operating_point.py.
+        #
+        # This job trains a 600-step model to prove the pipeline. That model
+        # reads no pristine plate correctly, so its clean-plate confidence is
+        # 0.0000, and no threshold can both keep silent-wrong under 1% and stay
+        # at or below that. A refusal naming the numbers is the correct output.
+        #
+        # Until this round the harness chose on silent-wrong ALONE and would
+        # have written 0.500 here: a threshold nothing clears, recorded in a
+        # sidecar as though it had been measured. The same rule wrote 0.995 for
+        # a real retrained checkpoint whose pristine plates answer only at 0.99.
         run: |
           python scripts/eval_plates.py --per-rung 40 --skip-baseline \
-            --write-operating-point
+            --write-operating-point | tee /tmp/eval.txt
+          grep -q "REFUSED" /tmp/eval.txt || {
+            echo "the harness chose an operating point for a model that reads nothing"; exit 1; }
+          grep -q "NOT written" /tmp/eval.txt || {
+            echo "the harness refused and wrote a sidecar anyway"; exit 1; }
+          test ! -f models/plate_crnn.operating-point.json || {
+            echo "a sidecar exists after a refusal"; exit 1; }
+          echo "refused, as required, and wrote nothing"
+
+      - name: Record a PIPELINE operating point for the smoke model
+        # Not a measurement, and the sidecar says so in the evidence block.
+        #
+        # The steps below prove plumbing -- the engine starts on weights whose
+        # operating point exists, refuses when it does not, and the CLI reads a
+        # folder -- and that needs a sidecar. The harness correctly refuses to
+        # produce one for a model this small, so it is written here, explicitly,
+        # by hand, at a threshold this model never clears. Every read below is
+        # therefore a FALLBACK, which is the first-class answer the README shows
+        # and exactly what the previous auto-written 0.500 produced.
+        #
+        # Writing it here rather than loosening the chooser is the point: the
+        # exception is one visible step in one job, not a rule the release path
+        # also travels.
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from vehicle_id.engine import write_operating_point
+          path = write_operating_point(
+              Path("models/plate_crnn.pt"),
+              0.5,
+              {
+                  "measured": False,
+                  "why": "CI pipeline fixture, NOT a measured operating point. "
+                         "The 600-step model this job trains reads no plate "
+                         "correctly and the harness refuses it an operating "
+                         "point. Every read at this threshold is a fallback.",
+              },
+              same_vehicle_spread=0.0,
+              noise_confidence_ceiling=0.0,
+          )
+          print(f"wrote {path}")
+          PY
 
       - name: An unmeasured model must refuse to start
         # The control for the step above. If the engine would happily run

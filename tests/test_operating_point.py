@@ -22,8 +22,11 @@ the numbers is the correct output. `0de21983` is the reference checkpoint, whose
 0.99 the chooser must still choose -- without that side, "refuses" and "refuses
 everything" are the same test.
 
-Needs no weights, no torch and no model: the chooser is a pure function over a
-table of measured rows, which is what makes both answers reachable here.
+Needs no weights and no model: the chooser is a pure function over a table of
+measured rows, which is what makes both answers reachable here. It does need
+torch and OpenCV importable, and only because `eval_plates.py` pulls them in at
+module scope -- so this module skips in the no-engine job, declared, and runs in
+full in the engine job.
 """
 
 from __future__ import annotations
@@ -35,6 +38,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+
+pytest.importorskip("torch")
+pytest.importorskip("cv2")
 
 from eval_plates import (  # noqa: E402
     CANDIDATE_THRESHOLDS,
