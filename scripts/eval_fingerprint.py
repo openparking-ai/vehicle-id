@@ -14,8 +14,6 @@ measures a harder problem than the product has and produces a pessimistic number
 that means nothing. Eighteen photographs of eighteen DIFFERENT cars, which is
 what the previous round collected, cannot measure matching at all.
 
-Five rules this file exists to enforce.
-
   * **No real data reaches a repository.** The photographs and the index live
     outside every git work tree and this refuses to run if any path it is handed
     resolves inside one. What it writes is counts, and the writer REFUSES to
@@ -46,13 +44,6 @@ Five rules this file exists to enforce.
     point is chosen on the first and the count table is produced on the second.
     Comparisons that straddle the halves are used in neither, and how many were
     dropped is published.
-
-  * **The receipt states the BOUNDS, not just the counts.** Twenty pairs give 20
-    same-car and 760 different-car comparisons, and a perfect run bounds the
-    miss rate only at about 15% and the false-match rate at about 0.4%. A table
-    of zeros that cannot support the decision it is being read for is worse than
-    a table with a caveat, so every count carries its 95% Clopper-Pearson upper
-    bound and the count it was computed over.
 
 And one number that decides a later round on its own: the TIE RATE. For every
 same-car pair, how many OTHER images in the set fall within the same distance --
