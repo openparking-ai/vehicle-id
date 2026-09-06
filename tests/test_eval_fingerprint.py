@@ -569,15 +569,25 @@ def test_the_two_harnesses_agree_about_what_is_inside_a_repository(tmp_path):
     narrow what that digest covers. So the two copies are required to agree,
     here, on the same inputs -- drift turns the suite red rather than leaving
     two guards that quietly disagree.
+
+    **Strings as well as `Path` objects, and that is a correction.** The two
+    copies HAD drifted -- one resolved `Path(path)` and the other `path` -- and
+    this test could not see it, because every input it tried was already a
+    `Path`. Neither call site passes a string today, so nothing was wrong; a
+    guard that can only observe the divergences it was built for is the thing
+    being fixed, not the one character. An input type is an axis, and a fixture
+    varies every axis the decision branches on.
     """
     pytest.importorskip("torch")  # eval_real_plates pulls it in at module scope
     import eval_real_plates
 
-    for path in (ROOT, ROOT / "src" / "vehicle_id", tmp_path, tmp_path / "not-yet.json"):
-        assert (
-            eval_real_plates.inside_git_work_tree(path)
-            == outside_repositories.inside_git_work_tree(path)
-        ), path
+    paths = (ROOT, ROOT / "src" / "vehicle_id", tmp_path, tmp_path / "not-yet.json")
+    for path in paths:
+        for value in (path, str(path)):
+            assert (
+                eval_real_plates.inside_git_work_tree(value)
+                == outside_repositories.inside_git_work_tree(value)
+            ), f"{value!r} ({type(value).__name__})"
 
 
 # --- end to end -----------------------------------------------------------

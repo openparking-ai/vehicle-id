@@ -243,14 +243,45 @@ class PlateEngine:
         identity and the engine's promise is that it always returns a record; a
         component that could not be computed is null, exactly like every other
         component nothing measured.
+
+        There are TWO ways an injected computer fails, and both end here. That
+        is not tidiness: `descriptor=` is a PUBLISHED injection point -- the
+        docstring above says "anything with `.compute(image) -> str`" -- so what
+        comes back is a third party's value, and a published SHAPE is not an
+        enforced one. A computer that throws was caught from the first line of
+        this method. A computer that returns the wrong TYPE was not: the value
+        went on to `Identity(...)`, whose type check raised `ValueError` out of
+        a method whose own docstring promises no path through it raises. At a
+        barrier a raise is not an answer a lane can act on; an absent component
+        is, and it is the answer every other unmeasured component already gives.
+
+        One path, two log lines, and the line says which -- because "the
+        descriptor is always null" is diagnosed differently depending on whether
+        the computer is broken or the wrong object was passed. A caller who
+        writes `PlateEngine(weights, descriptor="orb")`, thinking the parameter
+        names a kind, arrives here through the first branch and is told so.
         """
         if self._descriptor is None or image is None:
             return None
         try:
-            return self._descriptor.compute(image)
+            text = self._descriptor.compute(image)
         except Exception:  # noqa: BLE001 - a component, not the answer
-            log.warning("the appearance descriptor could not be computed", exc_info=True)
+            log.warning(
+                "the appearance descriptor could not be computed: %s raised",
+                type(self._descriptor).__name__,
+                exc_info=True,
+            )
             return None
+        if not isinstance(text, str):
+            log.warning(
+                "the appearance descriptor could not be computed: %s.compute "
+                "returned %s, and the injection point's published shape is "
+                "`.compute(image) -> str`",
+                type(self._descriptor).__name__,
+                type(text).__name__,
+            )
+            return None
+        return text
 
     def _record(
         self,

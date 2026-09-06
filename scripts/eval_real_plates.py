@@ -148,8 +148,15 @@ def inside_git_work_tree(path: Path) -> Path | None:
     `.git` is a directory in a clone and a FILE in a worktree, so both count.
     The check walks up from the resolved path, and a path that does not exist
     yet -- an `--out` about to be created -- is answered by its parent.
+
+    `Path(path)` rather than `path.resolve()`, so a string is answered the same
+    way an object is. This copy and `scripts/outside_repositories.py` had
+    already drifted apart on exactly that, and the test that requires them to
+    agree could not see it because it passed only `Path` objects. Both call
+    sites use `argparse type=Path`, so nothing was wrong -- which is the whole
+    problem with a divergence a guard cannot observe.
     """
-    here = path.resolve()
+    here = Path(path).resolve()
     for candidate in (here, *here.parents):
         if (candidate / ".git").exists():
             return candidate
