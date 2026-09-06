@@ -111,6 +111,75 @@ jobs:
         # names no allowance on purpose.
         run: pytest tests/test_presence_wiring.py tests/test_presence.py tests/test_skip_guard.py -q
 
+      - name: The appearance descriptor, its matcher, and what it may be built from
+        # Needs OpenCV and NO weights, which is the point: the descriptor is
+        # classical, so every one of its properties is provable from images the
+        # tests invent. No allowance is named here on purpose -- nothing in
+        # these three modules has a reason to skip in this job, and a skip
+        # should stop the build.
+        #
+        # The dependency module is the licence position as a check: a live
+        # patent (SURF), descriptors that download weights at runtime
+        # (xfeatures2d's VGG/BoostDesc/BEBLID/TEBLID), and GPLv3-with-a-paid-
+        # exception (libpHash). Its positive control plants a contrib
+        # distribution on sys.path and requires the probe to see it, because on
+        # a headless build "contrib is absent" passes for free.
+        run: |
+          pytest tests/test_fingerprint.py tests/test_fingerprint_dependencies.py \
+                 tests/test_eval_fingerprint.py -q
+
+      - name: The pair harness RUNS, end to end, on a synthetic pair set
+        # Round A's whole output is a number produced by this harness, and the
+        # photographs it needs do not exist yet. So what CI can prove -- and
+        # does, here -- is that the harness runs: descriptors, every
+        # comparison, the fit/report split, the chooser, the bounds, the tie
+        # count, the guard and the writer.
+        #
+        # /tmp is outside every git work tree, which is the harness's own
+        # precondition; pointed inside one it refuses, and that refusal is
+        # tested above. Two of the six pairs are FLAT, so the UNMEASURABLE
+        # outcome is exercised in both halves of the split rather than assumed
+        # reachable.
+        #
+        # Everything it writes is marked `synthetic: true` and
+        # `is_a_measurement_of_real_vehicles: false`. These numbers are invented
+        # and may never be quoted as the answer.
+        run: |
+          python scripts/eval_fingerprint.py --write-synthetic /tmp/fp-pairs \
+            --pairs 6 --flat 2
+          python scripts/eval_fingerprint.py \
+            --photos /tmp/fp-pairs --index /tmp/fp-pairs/index.json \
+            --out /tmp/fp-evidence.json | tee /tmp/fp.txt
+          grep -q "SYNTHETIC" /tmp/fp.txt || {
+            echo "a synthetic run did not say so"; exit 1; }
+          python - <<'PY'
+          import json, sys
+          obj = json.load(open("/tmp/fp-evidence.json"))
+          assert obj["synthetic"] is True
+          assert obj["is_a_measurement_of_real_vehicles"] is False
+          unmeasurable = sum(
+              obj["arms"]["structure"]["distances"][k]["unmeasurable"]
+              for k in ("same_car", "different_car")
+          )
+          assert unmeasurable > 0, (
+              "no comparison was unmeasurable, so the third outcome was not "
+              "exercised and this run proves less than it appears to"
+          )
+          print(f"harness ran; {unmeasurable} unmeasurable comparisons, as intended")
+          PY
+
+      - name: The harness REFUSES to read or write inside a repository
+        # The no-real-data rule, as a check rather than a convention.
+        # `check-no-real-data.js` scans TRACKED files and can never see a
+        # photograph outside the tree, so this is the half that protects the
+        # photographs themselves.
+        run: |
+          if python scripts/eval_fingerprint.py --photos . --index /tmp/fp-pairs/index.json \
+               --out /tmp/x.json; then
+            echo "the harness read photographs from inside the repository"; exit 1
+          fi
+          echo "refused, as required"
+
       - name: Engine tests, including never-wrong-silently
         # The accuracy half, which genuinely needs weights better than the small
         # model this job trains. The skips are DECLARED: an unnamed skip of a

@@ -44,6 +44,7 @@ import cv2  # noqa: E402
 from vehicle_id.contract import ANSWER, FALLBACK, Capture  # noqa: E402
 from vehicle_id.engine import RECOMMENDED_CONFIDENCE_THRESHOLD, PlateEngine  # noqa: E402
 from vehicle_id.plates.generator import PlateGenerator  # noqa: E402
+from vehicle_id.plates.recognizer import CharacterRead, PlateRecognizer  # noqa: E402
 
 #: CI trains a small model at the default path; a full local run can point at
 #: properly trained weights so the assertions that need a real confidence
@@ -782,3 +783,83 @@ def test_with_no_detector_presence_is_not_measured_and_nothing_changes(clean_con
     read = engine.read([as_capture(sample.image)])
     assert read.presence is None
     assert read.is_answer
+
+
+# --- the per-character confidences, exposed WITHOUT widening the tuple ----
+#
+# `read()` returning `(text, confidence)` is a published contract, not an
+# implementation detail: `PlateEngine`'s `recognizer=` is a documented injection
+# point whose stated shape is "anything with `.read(image) -> (text, conf)`", and
+# third-party recognisers are written against it. So the per-character numbers --
+# which `read` already computed and threw away -- are reached through a SEPARATE
+# accessor, and the tests below are what keeps that true.
+
+
+class _RecogniserWithoutWeights(PlateRecognizer):
+    """The accessor's shape, provable with no checkpoint.
+
+    `PlateRecognizer.__init__` loads weights; this replaces it, so what is under
+    test is the relationship between the two methods rather than the model. That
+    relationship is the whole of the change, and it must be checkable in a job
+    that has no weights -- which is where a widened tuple would have broken
+    things and where nobody would have noticed.
+    """
+
+    def __init__(self, result: CharacterRead) -> None:  # noqa: D107
+        self._result = result
+
+    def read_characters(self, image):
+        return self._result
+
+
+@pytest.mark.guarantee
+def test_read_still_returns_exactly_two_values():
+    """The published shape, unchanged, and proven rather than assumed.
+
+    Widen `read` to three and this goes red -- as would `engine.py:173`, six call
+    sites in `scripts/eval_plates.py`, both test stubs in this suite and every
+    third-party recogniser, which is precisely why it was not widened.
+    """
+    recogniser = _RecogniserWithoutWeights(
+        CharacterRead(text="AB1", confidence=0.5, per_character=(0.4, 0.5, 0.6))
+    )
+    result = recogniser.read(object())
+    assert isinstance(result, tuple) and len(result) == 2
+    text, confidence = result
+    assert text == "AB1" and confidence == 0.5
+
+
+@pytest.mark.guarantee
+def test_the_per_character_confidences_are_one_per_emitted_character():
+    """The record refuses to exist in a state where they do not line up.
+
+    Without this the accessor could hand back a plausible tuple of the wrong
+    length, and a later stage saying "character 3 is the uncertain one" would be
+    pointing at the wrong character.
+    """
+    with pytest.raises(ValueError, match="one each"):
+        CharacterRead(text="ABC", confidence=0.5, per_character=(0.4, 0.5))
+
+
+@needs_weights
+@pytest.mark.guarantee
+def test_the_confidence_is_the_mean_of_the_per_character_numbers():
+    """One number derived from the other, in one place, on the REAL recogniser.
+
+    They were always the same numbers -- `read`'s confidence IS their mean -- and
+    the point of the accessor is that it exposes what was computed rather than
+    recomputing it. Two implementations would eventually disagree about one read.
+    """
+    recogniser = PlateRecognizer(WEIGHTS)
+    sample = next(iter(PlateGenerator(seed=3).batch(1)))
+    detailed = recogniser.read_characters(sample.image)
+    text, confidence = recogniser.read(sample.image)
+
+    assert detailed.text == text
+    assert detailed.confidence == confidence
+    assert len(detailed.per_character) == len(detailed.text)
+    if detailed.per_character:
+        assert detailed.confidence == pytest.approx(
+            sum(detailed.per_character) / len(detailed.per_character)
+        )
+        assert all(0.0 <= c <= 1.0 for c in detailed.per_character)

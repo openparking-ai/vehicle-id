@@ -53,6 +53,20 @@ GUARANTEE_MODULES = (
     # every read, and the constraint that stops it choosing one that breaks a
     # published guarantee is proven here and nowhere else.
     "test_operating_point.py",
+    # The appearance descriptor and its matcher. The three-outcome rule lives
+    # here: "nothing matched" and "there was nothing to match" are different
+    # answers, and a build where they had merged would report a better number
+    # than it measured. Opens with `importorskip`, the shape that vanished
+    # silently before.
+    "test_fingerprint.py",
+    # What the descriptor may be built from. The forbidden list is a LICENCE
+    # position -- a live patent, weights downloaded at runtime, GPLv3 with a
+    # paid exception -- so a job where these stopped running would be a job
+    # where the project's licence claims stopped being checked.
+    "test_fingerprint_dependencies.py",
+    # The pair harness, which is round A's whole output. Every way it could
+    # produce a flattering number is planted here.
+    "test_eval_fingerprint.py",
 )
 
 _skipped: list[tuple[str, str]] = []
