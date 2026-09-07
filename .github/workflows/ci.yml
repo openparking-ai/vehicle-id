@@ -187,6 +187,9 @@ jobs:
         # while measuring nothing. It asserts the REFUSAL'S TEXT instead, and
         # the fail-control below is the other refusal, required to be rejected.
         run: |
+          # Load-bearing: the run below pipes through `tee`, so without this the
+          # pipeline reports tee's status, not the harness's, and a correct
+          # refusal becomes a red build whose message says the opposite.
           set -o pipefail
           if python scripts/eval_fingerprint.py --photos . \
                --index /tmp/fp-pairs/index.json --out /tmp/x.json \
