@@ -343,13 +343,28 @@ def distribution(values: list[float], unmeasurable: int) -> dict:
     reader cannot quote the quantiles without also having been handed the number
     of comparisons they were not computed over.
     """
+    #: The percentile keys are spelled out, and that is not a style choice.
+    #:
+    #: `leaks` refuses any output string CONTAINING an operator's pair id, keys
+    #: included. Spelled `p05` and `p95`, these two keys collide with the most
+    #: obvious id scheme a pair set can have -- `p01`, `p02`, ... -- and an index
+    #: numbering its pairs that way is refused at the writer, AFTER every
+    #: distance has been computed and BEFORE the terminal summary prints. The
+    #: run then emits no numbers at all and reads like a crash.
+    #:
+    #: This is not the same as the `auc` case the module docstring describes and
+    #: keeps. An operator naming a pair `auc` has chosen an odd label and a
+    #: refusal is a fair answer. `p05` is not an odd label; it is the default
+    #: one. A guard whose false positive is the obvious naming scheme is a trap
+    #: rather than a safe direction, so the harness's own vocabulary moves out
+    #: of the way instead.
     return {
         "measurable": len(values),
         "unmeasurable": unmeasurable,
         "min": min(values) if values else None,
-        "p05": quantile(values, 0.05),
+        "percentile_05": quantile(values, 0.05),
         "median": quantile(values, 0.50),
-        "p95": quantile(values, 0.95),
+        "percentile_95": quantile(values, 0.95),
         "max": max(values) if values else None,
         "mean": statistics.fmean(values) if values else None,
     }
