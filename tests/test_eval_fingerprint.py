@@ -24,6 +24,7 @@ required to be provable BEFORE the real photographs exist.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -492,6 +493,51 @@ def test_the_writer_refuses_a_leak_used_as_a_key(tmp_path):
     obj["arms"]["s001"] = {"n": 0}
     with pytest.raises(InputLeakedIntoOutput):
         write_output(obj, tmp_path / "out.json", {"s001"})
+
+
+@guarantee
+def test_no_published_key_collides_with_the_obvious_pair_id_scheme(pair_set):
+    """The default naming scheme must not be refused by our own vocabulary.
+
+    A pair set numbered `p01`, `p02`, ... is the obvious thing an operator
+    builds, and `leaks` refuses any key CONTAINING an id. Two percentile keys
+    were once spelled `p05` and `p95`, so such an index was refused at the
+    writer -- after every distance was computed and before the summary printed,
+    which reads as a crash rather than as a refusal.
+
+    This asserts the property rather than the spelling: no key the harness
+    always emits may look like `pNN`. It fails again if anyone shortens them.
+    """
+    keys = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                keys.add(k)
+                walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v)
+
+    walk(the_real_object(pair_set))
+    offenders = sorted(k for k in keys if re.fullmatch(r"p\d{2}", k))
+    assert not offenders, (
+        f"{offenders} collide with a pNN pair id; an index numbered that way "
+        "would be refused at the writer with no numbers printed"
+    )
+
+
+@guarantee
+def test_a_pair_set_numbered_pNN_is_written_not_refused(tmp_path, pair_set):
+    """The behavioural half: the refusal above is gone end to end.
+
+    The control is the test above it -- assert the shape, then prove the shape
+    is what was actually costing a run.
+    """
+    obj = the_real_object(pair_set)
+    tokens = {f"p{n:02d}" for n in range(1, 27)} | {f"p{n:02d}a.png" for n in range(1, 27)}
+    path = write_output(obj, tmp_path / "out.json", tokens)
+    assert json.loads(path.read_text())
 
 
 @guarantee
